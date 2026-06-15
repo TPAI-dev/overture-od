@@ -1,0 +1,51 @@
+{
+    "attacker": {
+        "race": "gnome",
+        "land": {
+            "plain": 1000
+        },
+        "military": {
+            "unit1": 8000
+        },
+        "draftees": 0,
+        "prestige": 0,
+        "morale": 100
+    },
+    "target": {
+        "race": "Human",
+        "land": {
+            "plain": 900
+        },
+        "military": {
+            "unit2": 5000
+        },
+        "draftees": 1000,
+        "prestige": 250,
+        "morale": 100
+    },
+    "unitsSent": {
+        "1": 8000,
+        "2": 0,
+        "3": 0,
+        "4": 0
+    },
+    "computed": {
+        "range": 90,
+        "in_range": true,
+        "op": 34400,
+        "temple_reduction": 0,
+        "dp_with_temples": 16000,
+        "land_lost": 51,
+        "success": true,
+        "prestige_gain": 67,
+        "prestige_loss": -13,
+        "prestige_penalty": 0,
+        "attacker_units_lost": {
+            "1": 4000
+        },
+        "defender_units_lost": {
+            "draftees": 48,
+            "2": 240
+        }
+    }
+}

@@ -1,0 +1,67 @@
+{
+    "attacker": {
+        "race": "Human",
+        "land": {
+            "plain": 700,
+            "mountain": 200,
+            "swamp": 100
+        },
+        "buildings": {
+            "gryphon_nest": 150,
+            "temple": 100
+        },
+        "military": {
+            "unit4": 8000
+        },
+        "draftees": 0,
+        "improvements": {
+            "forges": 80000
+        },
+        "prestige": 400,
+        "morale": 100
+    },
+    "target": {
+        "race": "Human",
+        "land": {
+            "plain": 600,
+            "hill": 200
+        },
+        "buildings": {
+            "guard_tower": 160
+        },
+        "military": {
+            "unit2": 10000
+        },
+        "draftees": 2000,
+        "improvements": {
+            "walls": 40000
+        },
+        "prestige": 250,
+        "morale": 100
+    },
+    "unitsSent": {
+        "1": 0,
+        "2": 0,
+        "3": 0,
+        "4": 8000
+    },
+    "computed": {
+        "range": 80,
+        "in_range": true,
+        "op": 61593.600000000006,
+        "temple_reduction": 0.135,
+        "dp_with_temples": 37984,
+        "land_lost": 41,
+        "success": true,
+        "prestige_gain": 46,
+        "prestige_loss": -13,
+        "prestige_penalty": -20,
+        "attacker_units_lost": {
+            "4": 420
+        },
+        "defender_units_lost": {
+            "draftees": 93,
+            "2": 467
+        }
+    }
+}

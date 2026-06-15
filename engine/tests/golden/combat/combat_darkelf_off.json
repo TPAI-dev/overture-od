@@ -1,0 +1,51 @@
+{
+    "attacker": {
+        "race": "dark-elf",
+        "land": {
+            "plain": 1000
+        },
+        "military": {
+            "unit4": 10000
+        },
+        "draftees": 0,
+        "prestige": 0,
+        "morale": 100
+    },
+    "target": {
+        "race": "Human",
+        "land": {
+            "plain": 600
+        },
+        "military": {
+            "unit2": 3000
+        },
+        "draftees": 500,
+        "prestige": 250,
+        "morale": 100
+    },
+    "unitsSent": {
+        "1": 0,
+        "2": 0,
+        "3": 0,
+        "4": 10000
+    },
+    "computed": {
+        "range": 60,
+        "in_range": true,
+        "op": 55000,
+        "temple_reduction": 0,
+        "dp_with_temples": 9500,
+        "land_lost": 17,
+        "success": true,
+        "prestige_gain": 5,
+        "prestige_loss": -5,
+        "prestige_penalty": 0,
+        "attacker_units_lost": {
+            "4": 147
+        },
+        "defender_units_lost": {
+            "draftees": 24,
+            "2": 144
+        }
+    }
+}

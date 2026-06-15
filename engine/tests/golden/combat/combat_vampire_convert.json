@@ -1,0 +1,52 @@
+{
+    "attacker": {
+        "race": "vampire",
+        "land": {
+            "plain": 1000
+        },
+        "military": {
+            "unit4": 15000
+        },
+        "draftees": 0,
+        "prestige": 250,
+        "morale": 100
+    },
+    "target": {
+        "race": "Human",
+        "land": {
+            "plain": 900
+        },
+        "military": {
+            "unit2": 6000
+        },
+        "draftees": 1000,
+        "prestige": 250,
+        "morale": 100
+    },
+    "unitsSent": {
+        "1": 0,
+        "2": 0,
+        "3": 0,
+        "4": 15000
+    },
+    "computed": {
+        "range": 90,
+        "in_range": true,
+        "op": 61499.99999999999,
+        "temple_reduction": 0,
+        "dp_with_temples": 19000,
+        "land_lost": 51,
+        "success": true,
+        "prestige_gain": 67,
+        "prestige_loss": -13,
+        "prestige_penalty": -13,
+        "attacker_units_lost": {},
+        "defender_units_lost": {
+            "draftees": 48,
+            "2": 288
+        },
+        "converted_units": {
+            "3": 165
+        }
+    }
+}

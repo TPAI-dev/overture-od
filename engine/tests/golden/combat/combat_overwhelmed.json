@@ -1,0 +1,55 @@
+{
+    "attacker": {
+        "race": "Human",
+        "land": {
+            "plain": 1000
+        },
+        "buildings": [],
+        "military": {
+            "unit4": 1000
+        },
+        "draftees": 0,
+        "improvements": [],
+        "prestige": 0,
+        "morale": 100
+    },
+    "target": {
+        "race": "Human",
+        "land": {
+            "plain": 900,
+            "hill": 50
+        },
+        "buildings": {
+            "guard_tower": 50
+        },
+        "military": {
+            "unit2": 8000
+        },
+        "draftees": 1000,
+        "improvements": [],
+        "prestige": 250,
+        "morale": 100
+    },
+    "unitsSent": {
+        "1": 0,
+        "2": 0,
+        "3": 0,
+        "4": 1000
+    },
+    "computed": {
+        "range": 95,
+        "in_range": true,
+        "op": 6000,
+        "temple_reduction": 0,
+        "dp_with_temples": 27105.263157894737,
+        "land_lost": 55,
+        "success": false,
+        "prestige_gain": 72,
+        "prestige_loss": -13,
+        "prestige_penalty": 0,
+        "attacker_units_lost": {
+            "4": 85
+        },
+        "defender_units_lost": {}
+    }
+}

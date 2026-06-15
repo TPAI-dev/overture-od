@@ -1,0 +1,5 @@
+# Keep the Tauri asset bundle to just the frontend — exclude backend + tooling.
+src-tauri
+.codex
+.claude
+README.md

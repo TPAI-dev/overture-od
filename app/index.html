@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>OVERTURE — protection build studio</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="./src/styles.css" />
+</head>
+<body data-reduced-motion="false">
+<div id="app">
+
+  <!-- ───────────────── command / score bar ───────────────── -->
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span class="brand-word">OVERTURE</span>
+      <span class="brand-sub">protection studio</span>
+    </div>
+
+    <span class="mode-badge" id="modeBadge" title=""></span>
+
+    <button class="builds-btn" id="undoBtn" title="Undo last change (⌘Z / Ctrl+Z)" disabled>↶&nbsp;undo</button>
+    <button class="builds-btn" id="redoBtn" title="Redo (⇧⌘Z / Ctrl+Y)" disabled>↷&nbsp;redo</button>
+    <button class="builds-btn" id="buildsBtn" title="Save / load builds">⌗&nbsp;builds</button>
+    <button class="builds-btn" id="logBtn" title="Export an importable protection log (.txt) — the game's protection import will replay these actions">⇩&nbsp;log</button>
+    <button class="builds-btn" id="resetBtn" title="Clear the build back to a blank canvas">↺&nbsp;reset</button>
+
+    <div class="topbar-controls">
+      <label class="field">
+        <span class="field-label">race</span>
+        <select id="raceSelect" class="field-input"></select>
+      </label>
+      <label class="field">
+        <span class="field-label">trained DP target</span>
+        <input id="dpInput" class="field-input num" type="number" inputmode="numeric" value="6000" step="100" />
+      </label>
+      <label class="field">
+        <span class="field-label">post-OOP hrs</span>
+        <input id="postOopInput" class="field-input num" type="number" inputmode="numeric" min="0" max="480" step="1" value="0" title="Extend the plan PAST out-of-protection by this many hours (0–480 ≈ 20 days). Default 0 = stop at OOP (hour 49). The economy continues past OOP; combat isn't modeled yet (Phase 1), so a long window is an uninterrupted-farm projection." />
+      </label>
+      <span class="field-note" title="Draftees are excluded from the target — a race spell negates them.">trained only · draftees excluded</span>
+    </div>
+
+    <div class="score">
+      <div class="gate" id="gate" data-state="short">
+        <span class="gate-dot" aria-hidden="true"></span>
+        <span class="gate-label" id="gateLabel">SHORT</span>
+        <span class="gate-detail" id="gateDetail">—</span>
+      </div>
+      <div class="score-land">
+        <span class="score-num" id="oopLand">—</span>
+        <span class="score-cap">acres @ OOP</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- ───────────────── the spine (48-hour timeline) ───────────────── -->
+  <section class="spine" aria-label="48-hour timeline">
+    <div class="spine-rail">
+      <canvas id="spineCanvas" class="spine-canvas" tabindex="0"
+              aria-label="Scrub the protection timeline. Left and right arrows move the playhead."></canvas>
+    </div>
+    <div class="spine-readout">
+      <span class="readout-hour">HOUR <strong id="playheadHour">00</strong> <span class="readout-rem" id="playheadRem">/ 49 to OOP</span></span>
+      <span class="readout-hint"><kbd>←</kbd><kbd>→</kbd> scrub · <kbd>⇧</kbd>+<kbd>←</kbd><kbd>→</kbd> events · <kbd>E</kbd> edit hour · <kbd>Space</kbd> play</span>
+    </div>
+  </section>
+
+  <!-- ───────────────── workspace ───────────────── -->
+  <main class="workspace">
+
+    <!-- ledger -->
+    <section class="panel ledger-panel" aria-label="Hour ledger">
+      <div class="panel-head">
+        <h2 class="panel-title">LEDGER</h2>
+        <div class="panel-tools" id="ledgerCols"></div>
+      </div>
+      <div class="ledger-scroll" id="ledgerScroll">
+        <table class="ledger" id="ledger">
+          <thead id="ledgerHead"></thead>
+          <tbody id="ledgerBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- inspector -->
+    <aside class="panel inspector-panel" aria-label="Inspector">
+      <div class="panel-head tabs" role="tablist">
+        <button class="tab is-active" data-tab="state" role="tab">STATE <span class="tab-h" id="tabStateHour">@00</span></button>
+        <button class="tab" data-tab="oop" role="tab">OOP</button>
+      </div>
+      <div class="inspector-body">
+        <div class="tabpane is-active" data-pane="state" id="paneState"></div>
+        <div class="tabpane" data-pane="oop" id="paneOop"></div>
+      </div>
+    </aside>
+  </main>
+
+  <!-- ───────────────── trajectory charts ───────────────── -->
+  <section class="charts" aria-label="Trajectories">
+    <div class="charts-head">
+      <h2 class="panel-title">TRAJECTORIES</h2>
+      <div class="charts-legend" id="chartsLegend"></div>
+    </div>
+    <div class="charts-grid" id="chartsGrid"></div>
+  </section>
+
+</div>
+
+<!-- hard sim-error banner (engine rejected the plan) — auto-clears on the next good sim.
+     Lives outside #app's fixed 4-row grid; positioned fixed so it never shifts the layout. -->
+<div class="sim-error-bar" id="simError" role="alert" hidden></div>
+
+<!-- action editor popover -->
+<div class="editor-scrim" id="editorScrim" hidden></div>
+<div class="editor" id="editor" hidden role="dialog" aria-label="Edit hour actions"></div>
+
+<!-- build library -->
+<div class="builds-scrim" id="buildsScrim" hidden></div>
+<div class="builds-pop" id="buildsPop" hidden role="dialog" aria-label="Build library"></div>
+<input type="file" id="buildsImport" accept="application/json" hidden />
+
+<script type="module" src="./src/app.js"></script>
+</body>
+</html>

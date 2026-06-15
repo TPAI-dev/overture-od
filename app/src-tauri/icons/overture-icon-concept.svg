@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" role="img" aria-label="OVERTURE — protection build studio">
+  <title>OVERTURE</title>
+  <desc>A rising terracotta land-growth curve crossing a cream timeline playhead and reaching a green gate-cleared marker, on a dark squircle.</desc>
+  <defs>
+    <linearGradient id="ov-bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1b1e26"/>
+      <stop offset="0.55" stop-color="#101319"/>
+      <stop offset="1" stop-color="#08090c"/>
+    </linearGradient>
+    <radialGradient id="ov-top" cx="0.5" cy="0.12" r="0.75">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.07"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="ov-curve" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#a6633f"/>
+      <stop offset="0.45" stop-color="#cf8a63"/>
+      <stop offset="1" stop-color="#e9ac80"/>
+    </linearGradient>
+    <linearGradient id="ov-land" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#cf8a63" stop-opacity="0.30"/>
+      <stop offset="1" stop-color="#cf8a63" stop-opacity="0"/>
+    </linearGradient>
+    <clipPath id="ov-clip"><rect x="36" y="36" width="952" height="952" rx="212"/></clipPath>
+  </defs>
+  <rect x="36" y="36" width="952" height="952" rx="212" fill="url(#ov-bg)"/>
+  <rect x="36" y="36" width="952" height="952" rx="212" fill="url(#ov-top)"/>
+  <g clip-path="url(#ov-clip)">
+    <path d="M150 742 C430 735 648 470 858 250 L858 742 Z" fill="url(#ov-land)"/>
+    <line x1="150" y1="742" x2="874" y2="742" stroke="#e9e5d8" stroke-opacity="0.16" stroke-width="3"/>
+    <g stroke="#e9e5d8" stroke-opacity="0.22" stroke-width="3">
+      <line x1="150" y1="742" x2="150" y2="757"/>
+      <line x1="270" y1="742" x2="270" y2="757"/>
+      <line x1="390" y1="742" x2="390" y2="757"/>
+      <line x1="510" y1="742" x2="510" y2="757"/>
+      <line x1="630" y1="742" x2="630" y2="757"/>
+      <line x1="750" y1="742" x2="750" y2="757"/>
+      <line x1="870" y1="742" x2="870" y2="757"/>
+    </g>
+    <path d="M150 742 C430 735 648 470 858 250" fill="none" stroke="url(#ov-curve)" stroke-width="48" stroke-linecap="round"/>
+    <line x1="566" y1="150" x2="566" y2="752" stroke="#e9e5d8" stroke-opacity="0.10" stroke-width="26" stroke-linecap="round"/>
+    <line x1="566" y1="186" x2="566" y2="752" stroke="#0b0c0f" stroke-width="20" stroke-linecap="round"/>
+    <line x1="566" y1="186" x2="566" y2="752" stroke="#efece1" stroke-width="12" stroke-linecap="round"/>
+    <polygon points="536 150 596 150 566 198" fill="#efece1"/>
+    <circle cx="566" cy="546" r="13" fill="#efece1" stroke="#a6633f" stroke-width="5"/>
+    <line x1="762" y1="250" x2="906" y2="250" stroke="#5fd08a" stroke-opacity="0.5" stroke-width="4" stroke-dasharray="2 12" stroke-linecap="round"/>
+    <circle cx="858" cy="250" r="31" fill="#5fd08a" fill-opacity="0.20"/>
+    <circle cx="858" cy="250" r="17" fill="#5fd08a" stroke="#0b0c0f" stroke-width="4"/>
+    <circle cx="851" cy="243" r="6" fill="#d7f6e4" fill-opacity="0.85"/>
+  </g>
+  <rect x="37.5" y="37.5" width="949" height="949" rx="210.5" fill="none" stroke="#ffffff" stroke-opacity="0.07" stroke-width="2"/>
+</svg>

@@ -1,0 +1,81 @@
+# OVERTURE CI — correctness gate.
+#
+# Guarantees on every push/PR:
+#   * the engine BUILDS, and stays BIT-EXACT vs the round-50 golden vectors
+#     (engine/src/data.rs embeds data/ via include_dir!, so a clean checkout that
+#     passes the golden tests also proves the SHIPPED binary's data path works), and
+#   * the desktop app type-checks on both ship targets — macOS + Windows.
+
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+# Cancel superseded runs on the same ref so a rapid push series doesn't queue up.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  engine:
+    name: engine · bit-exact
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: engine
+      # The engine is pure Rust — no system deps. Prove it builds, then that it stays
+      # bit-exact across all engine test suites (golden vectors + combat).
+      - name: build engine
+        run: cargo build --manifest-path engine/Cargo.toml
+      - name: bit-exact tests
+        run: cargo test --manifest-path engine/Cargo.toml --tests
+
+  app:
+    name: app · compiles (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+      # `frontendDist` points at app/dist, which Tauri's generate_context! embeds at
+      # compile time. It's a build artifact produced by tauri.conf.json's
+      # beforeBuildCommand — but plain `cargo check` does NOT run that hook, so stage it
+      # by hand first. bash is present on all GitHub runners (incl. Windows / Git Bash).
+      - name: stage frontend dist
+        shell: bash
+        run: |
+          cd app
+          rm -rf dist && mkdir dist && cp index.html dist/ && cp -r src dist/
+      - name: cargo check
+        run: cargo check --manifest-path app/src-tauri/Cargo.toml
+
+  frontend:
+    name: frontend · syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      # No bundler — the frontend is hand-authored ES modules loaded directly by the
+      # webview. A syntax pass over every module is the cheap, meaningful lint.
+      - name: node --check all modules
+        run: |
+          for f in app/src/*.js; do
+            echo "checking $f"
+            node --check "$f"
+          done

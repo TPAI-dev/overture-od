@@ -1,0 +1,117 @@
+# OVERTURE release builder — produces UNSIGNED macOS + Windows desktop bundles and
+# attaches them to a GitHub Release.
+#
+# Trigger:
+#   * push a version tag, e.g.  git tag v0.1.0 && git push origin v0.1.0
+#   * or run it manually (Actions → Release → Run workflow) with a tag input.
+#
+# It creates a DRAFT release first (you review + publish it, then post the link in
+# Discord). The builds are UNSIGNED — no Apple/Microsoft signing certificate is used,
+# so users get a one-time Gatekeeper / SmartScreen prompt (the README explains the
+# unlock step). No secrets are needed beyond the automatic GITHUB_TOKEN.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v0.1.0) — created from the current commit if it doesn't exist"
+        required: true
+        default: v0.1.0
+
+permissions:
+  contents: write # create the release + upload assets
+
+# One release build per tag at a time.
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  create-release:
+    name: create draft release
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve tag
+        id: tag
+        run: echo "tag=${{ github.event.inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+      - name: Create the draft release if it doesn't exist (idempotent)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${{ steps.tag.outputs.tag }}"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "release $tag already exists — reusing it"
+          else
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" --draft \
+              --title "OVERTURE $tag" \
+              --notes "Unsigned macOS (.dmg, universal — Apple Silicon + Intel) and Windows (.exe / .msi) desktop builds. First-launch OS warnings are expected for unsigned apps — see the README for the macOS Gatekeeper (right-click → Open) and Windows SmartScreen (More info → Run anyway) unlock steps."
+          fi
+
+  build:
+    name: build (${{ matrix.os }})
+    needs: create-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # One universal macOS binary covers both Apple Silicon and Intel.
+          - os: macos-latest
+            target: universal-apple-darwin
+            rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
+          - os: windows-latest
+            target: ""
+            rust_targets: ""
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_targets }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+      # Prebuilt Tauri CLI (fast; binstall falls back to a source build if needed).
+      - uses: cargo-bins/cargo-binstall@main
+      - name: Install Tauri CLI
+        run: cargo binstall -y tauri-cli --version "^2"
+      # `cargo tauri build` runs tauri.conf.json's beforeBuildCommand (stages app/dist),
+      # then compiles the release profile and bundles. No signing identity is set, so the
+      # output is intentionally unsigned.
+      - name: Build unsigned bundles
+        working-directory: app
+        shell: bash
+        run: |
+          if [ -n "${{ matrix.target }}" ]; then
+            cargo tauri build --target ${{ matrix.target }}
+          else
+            cargo tauri build
+          fi
+      - name: Upload installers to the release
+        working-directory: app
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${{ needs.create-release.outputs.tag }}"
+          if [ -n "${{ matrix.target }}" ]; then
+            bundle="src-tauri/target/${{ matrix.target }}/release/bundle"
+          else
+            bundle="src-tauri/target/release/bundle"
+          fi
+          shopt -s nullglob
+          # macOS → .dmg ; Windows → NSIS .exe installer + .msi
+          files=( "$bundle"/dmg/*.dmg "$bundle"/nsis/*-setup.exe "$bundle"/msi/*.msi )
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "no installer bundles found under $bundle" >&2
+            find "$bundle" -maxdepth 2 -type f >&2 || true
+            exit 1
+          fi
+          printf 'uploading: %s\n' "${files[@]}"
+          gh release upload "$tag" "${files[@]}" --repo "$GITHUB_REPOSITORY" --clobber

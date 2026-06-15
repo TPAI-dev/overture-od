@@ -1,0 +1,6 @@
+{
+  "identifier": "default",
+  "description": "Core permissions for the OVERTURE main window.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

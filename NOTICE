@@ -1,0 +1,45 @@
+OVERTURE
+Copyright (C) 2026 lethal5808
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU Affero General Public License as published by the Free
+Software Foundation, either version 3 of the License, or (at your option) any
+later version. See the LICENSE file for the full text.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. As an AGPL-licensed work, if you run a modified version and
+let other users interact with it over a network, you must also offer them the
+corresponding source of your modified version.
+
+────────────────────────────────────────────────────────────────────────────
+Attribution
+────────────────────────────────────────────────────────────────────────────
+
+OVERTURE is an unofficial, fan-made tool for the game OpenDominion. It is not
+affiliated with, endorsed by, or sponsored by the OpenDominion project or its
+maintainers.
+
+OpenDominion — https://github.com/OpenDominion/OpenDominion — is licensed under
+the GNU Affero General Public License v3. OVERTURE derives from it in two ways,
+and inherits its license accordingly:
+
+  * The engine is a clean-room reimplementation of OpenDominion's round-50
+    game rules (production, population, combat, defense, and the per-tick
+    economy). The Rust source documents the upstream PHP calculators it mirrors.
+
+  * The game data in `data/` (race, tech, spell, and round tables) is mirrored
+    bit-for-bit from OpenDominion's round-50 source so the simulation matches
+    the live game exactly.
+
+All OpenDominion game content, names, and rules remain the property of the
+OpenDominion project and its contributors.
+
+────────────────────────────────────────────────────────────────────────────
+Third-party components
+────────────────────────────────────────────────────────────────────────────
+
+OVERTURE is built with the Tauri framework and the Rust crates serde,
+serde_json, and include_dir, among their transitive dependencies. These carry
+their own (permissive) licenses; see each crate and the committed Cargo.lock
+files, or run `cargo about` / `cargo license`, for the full dependency licenses.

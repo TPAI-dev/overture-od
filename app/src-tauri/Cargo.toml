@@ -1,0 +1,26 @@
+[package]
+name = "overture"
+version = "0.1.0"
+edition = "2021"
+description = "OVERTURE — OpenDominion protection-period build studio"
+authors = ["lethal5808"]
+# Standalone crate (not part of a workspace); the engine is a path dependency.
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# The bit-exact game engine — imported READ-ONLY as the single source of truth.
+# This adapter only calls its public API; it never modifies engine logic.
+engine = { path = "../../engine" }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

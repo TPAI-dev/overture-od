@@ -1,0 +1,11 @@
+[package]
+name = "engine"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Embeds the round-50 game data (data/*.json) into the binary at compile time, so a shipped app
+# needs no external data files and can't be accidentally altered. Updating data = a new build.
+include_dir = "0.7"

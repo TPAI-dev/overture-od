@@ -11,7 +11,7 @@
 #
 # Prefers the Tauri CLI (proper .app + .dmg bundle). If the CLI isn't installed it
 # falls back to compiling the release binary and swapping it into the existing .app
-# bundle in place (ad-hoc re-signed) so OVERTURE.app still launches with the new code.
+# bundle in place (ad-hoc re-signed) so Overture.app still launches with the new code.
 
 set -euo pipefail
 cd "$(dirname "$0")" # → app/
@@ -24,17 +24,18 @@ cd src-tauri
 if cargo tauri --version >/dev/null 2>&1; then
   echo "▸ cargo tauri build (full bundle) …"
   cargo tauri build
-  echo "✅ rebuilt OVERTURE.app + .dmg via cargo tauri build"
-  echo "   bundle: $(pwd)/target/release/bundle/macos/OVERTURE.app"
+  echo "✅ rebuilt Overture.app + .dmg via cargo tauri build"
+  echo "   bundle: $(pwd)/target/release/bundle/macos/Overture.app"
   exit 0
 fi
 
 echo "▸ no Tauri CLI — compiling release binary …"
 cargo build --release
 
-APP="target/release/bundle/macos/OVERTURE.app"
+APP="target/release/bundle/macos/Overture.app"
 if [ -d "$APP" ]; then
-  cp target/release/overture "$APP/Contents/MacOS/overture"
+  # the bundle executable is named after productName ("Overture"); copy over whatever is there
+  cp target/release/overture "$APP/Contents/MacOS/$(ls "$APP/Contents/MacOS" | head -1)"
   codesign --force --sign - "$APP" >/dev/null 2>&1 || true
   echo "✅ refreshed $APP (binary swap + ad-hoc sign)"
   echo "   open it:  open \"$(pwd)/$APP\""

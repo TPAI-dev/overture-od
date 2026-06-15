@@ -96,7 +96,7 @@ kbd {
   background-image: linear-gradient(90deg, transparent 45%, rgba(0,0,0,.55) 45%, rgba(0,0,0,.55) 55%, transparent 55%);
 }
 .brand-word { font-weight: 700; letter-spacing: .14em; font-size: 15px; }
-.brand-sub { font-size: 10px; letter-spacing: .18em; color: var(--text-faint); text-transform: uppercase; }
+.brand-exp { font-family: var(--font-mono); font-weight: 600; font-size: 9px; letter-spacing: 0; color: var(--c-land); vertical-align: baseline; position: relative; top: -5px; margin-left: 1px; }
 .mode-badge { font-family: var(--font-mono); font-size: 10px; font-weight: 600; letter-spacing: .08em; padding: 5px 10px; border-radius: var(--r); white-space: nowrap; cursor: help; }
 .mode-badge.engine { color: var(--green); background: rgba(95,208,138,.08); border: 1px solid var(--green-d); }
 .mode-badge.mock { color: var(--amber); background: rgba(227,169,63,.12); border: 1px solid var(--amber-d); }

@@ -2,6 +2,8 @@
 
 A desktop **build studio** for the protection period of [OpenDominion](https://github.com/OpenDominion/OpenDominion) — plan your dominion's first 48 in-game hours (and the out-of-protection economy that follows) against a **bit-exact** simulation of the round-50 game.
 
+![Overture — the 48-hour protection timeline, per-hour ledger, live state inspector, and resource-trajectory charts](docs/screenshot.png)
+
 OVERTURE pairs a deterministic Rust engine — a clean-room reimplementation of OpenDominion's per-tick rules, validated bit-for-bit against golden vectors emitted by the real game — with a Tauri desktop app. Edit your build hour by hour and watch land, resources, population, defense, and the leave-protection gate update instantly.
 
 > **Unofficial.** OVERTURE is a fan-made tool. It is not affiliated with or endorsed by the OpenDominion project. See [NOTICE](NOTICE).

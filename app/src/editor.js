@@ -13,6 +13,8 @@
 // so the row carries honest negatives and feasibility is read directly off them.
 
 import { renderTechTree } from "./techtree.js";
+import { listOpenings, saveOpening, deleteOpening, openingAcres } from "./openings.js";
+import { mountHourGrid } from "./hourgrid.js";
 
 const RES = [
   ["platinum", "--c-plat"], ["lumber", "--c-lumber"], ["ore", "--c-ore"],
@@ -54,11 +56,41 @@ export function createEditor(deps) {
   const scrim = document.getElementById("editorScrim");
   const root = document.getElementById("editor");
   let hour = 1, tab = "build", manageKind = "draft_rate", buildSel = "home", buildDir = "build", trainDir = "train";
+  let exploreSel = "plain", trainSel = 1; // the lane currently picked in the Explore / Train windows
 
   const plan = () => deps.getPlan();
   const meta = () => deps.getMeta() || { units: [], techs: [], buildingLand: {} };
   const buildingLand = (b) => (meta().buildingLand || {})[b] || "plain";
   const homeLand = () => meta().homeLand || "plain";
+
+  // Lane-aware live "consequence" columns for the embedded ±6h entry window (mirrors the ledger): the
+  // 3rd column tracks what the lane spends — lumber for Build, draftees for Explore/Train.
+  const SC = {
+    land: { key: "land", label: "land", c: "--c-land", get: (r) => (r.land || 0) + (r.incoming || 0) },
+    plat: { key: "plat", label: "plat", c: "--c-plat", get: (r) => r.platinum },
+    draft: { key: "draft", label: "draft", c: "--c-draftee", get: (r) => r.draftees },
+    lumber: { key: "lumber", label: "lmbr", c: "--c-lumber", get: (r) => r.lumber },
+    dp: { key: "dp", label: "DP", c: "--c-dp", get: (r) => Math.round(r.trainedModded || 0) },
+  };
+  const buildStateCols = [SC.land, SC.plat, SC.lumber, SC.dp];
+  const spendStateCols = [SC.land, SC.plat, SC.draft, SC.dp];
+  // Read/upsert one lane's quantity in a given hour's action list (match recognizes the lane's actions,
+  // make(n) builds a fresh one) — the embedded window's cell read/write.
+  const laneRead = (h, match) => (plan().hours[h - 1] || []).filter(match).reduce((s, a) => s + (a.n | 0), 0);
+  function laneWrite(h, match, make, value) {
+    const list = plan().hours[h - 1] || (plan().hours[h - 1] = []);
+    const keep = []; let done = false;
+    for (const a of list) { if (match(a)) { if (!done && value > 0) { a.n = value; keep.push(a); done = true; } } else keep.push(a); }
+    if (!done && value > 0) keep.push(make(value));
+    plan().hours[h - 1] = keep;
+  }
+  const rowAt = (h) => { const rows = deps.getTrace().rows; return rows[Math.min(rows.length - 1, h)]; };
+  // Shared opts for every embedded window: centered on the current editor hour, refreshing the
+  // budget strip + queue (not the form) after each commit so the window keeps focus.
+  const windowOpts = (extra) => Object.assign({
+    center: hour, radius: 6, maxHour: plan().hours.length, oopHour: OOP_HOUR,
+    rowAt, recordUndo: deps.recordUndo, recompute: deps.recompute, afterCommit: () => renderChrome(),
+  }, extra);
 
   /* ───────── wallet (read straight off the post-instant-action row) ───────── */
   // Row H is the POST-instant-action state A_H (the engine replays hour H's instant actions
@@ -301,6 +333,13 @@ export function createEditor(deps) {
       </div>
       <div class="ed-form">
         <div class="ed-open-note">Fill your 350 free starting acres with <b>any</b> buildings — each is auto-zoned to its land type (temples → swamp, guard towers → hill, ore mines → mountain…). This is the only free + instant build; everything after costs platinum/lumber + 12h on the hour tabs. The game requires all 350 acres built at the opening, so any acres you don't place <b>auto-fill as homes</b> — destroy + rezone them on later hours to change them.</div>
+        <div class="ed-tpl">
+          <div class="ed-tpl-head">
+            <span class="ed-tpl-cap">opening templates</span>
+            <div class="ed-tpl-save"><input id="tplName" class="ed-tpl-name" placeholder="name this opening…" autocomplete="off"><button class="ed-tpl-btn" id="tplSave" type="button">save</button></div>
+          </div>
+          <div class="ed-tpl-list" id="tplList"></div>
+        </div>
         ${groups.map(([t, bs]) => `
           <div class="ed-open-group">
             <div class="ed-open-gh"><span>${t}</span><span class="ed-open-ga" data-acres="${t}">0 acres</span></div>
@@ -321,6 +360,30 @@ export function createEditor(deps) {
     };
     root.querySelector(".ed-x").onclick = close;
     root.querySelector("#edToFirst").onclick = () => { open(1); deps.onNav && deps.onNav(1); };
+    // opening templates: save the current placement under a name, or stamp a saved one in. Lives
+    // inline here (the opening editor) — the most seamless place to reuse a starting build.
+    const tplName = root.querySelector("#tplName");
+    const defaultTplName = () => `${plan().race} opening ${listOpenings().filter((t) => t.race === plan().race).length + 1}`;
+    function renderTplList() {
+      const host = root.querySelector("#tplList"); if (!host) return;
+      const tpls = listOpenings(), race = plan().race;
+      host.innerHTML = tpls.length
+        ? tpls.map((t) => `<span class="ed-tpl-chip ${t.race && t.race !== race ? "alt" : ""}"><button class="ed-tpl-apply" data-apply="${t.id}" title="apply ${esc(t.name)}${t.race ? " (" + esc(t.race) + ")" : ""}">${esc(t.name)} <i>${int(t.acres || openingAcres(t.opening))}ac</i></button><button class="ed-tpl-del" data-del="${t.id}" title="delete">✕</button></span>`).join("")
+        : `<span class="ed-tpl-empty">no templates yet — place buildings below, then “save”</span>`;
+      host.querySelectorAll("[data-apply]").forEach((b) => (b.onclick = () => {
+        const t = listOpenings().find((x) => x.id === b.dataset.apply); if (!t) return;
+        deps.recordUndo("opening");
+        pln.opening = JSON.parse(JSON.stringify(t.opening || {}));
+        deps.recompute(0); renderOpening();
+      }));
+      host.querySelectorAll("[data-del]").forEach((b) => (b.onclick = () => { deleteOpening(b.dataset.del); renderTplList(); }));
+    }
+    root.querySelector("#tplSave").onclick = () => {
+      const nm = (tplName.value || "").trim() || defaultTplName();
+      saveOpening(nm, plan().race, pln.opening); tplName.value = ""; renderTplList();
+    };
+    tplName.onkeydown = (e) => { if (e.key === "Enter") root.querySelector("#tplSave").click(); };
+    renderTplList();
     root.querySelectorAll("input[data-b]").forEach((inp) => {
       inp.oninput = () => {
         const b = inp.dataset.b;
@@ -339,8 +402,7 @@ export function createEditor(deps) {
   function render() {
     if (hour === 0) return renderOpening();
     const w = remainingWallet();
-    const a = acts();
-    const nActs = a.length;
+    const nActs = acts().length;
     root.innerHTML = `
       <div class="ed-head">
         <div class="ed-hour">
@@ -351,25 +413,35 @@ export function createEditor(deps) {
         </div>
         <button class="ed-x" aria-label="close">✕</button>
       </div>
-      ${budgetStrip(w)}
+      <div id="edBudget"></div>
       <div class="ed-main">
         <nav class="ed-rail" role="tablist">${TABS.map(([k, l]) => `<button class="ed-tab ${k === tab ? "on" : ""}" data-tab="${k}" role="tab">${l}</button>`).join("")}</nav>
         <div class="ed-form" id="edForm"></div>
-        <div class="ed-queue">
-          <div class="ed-queue-cap">QUEUED @ HOUR ${String(hour).padStart(2, "0")}</div>
-        <div class="ed-queue-list">${nActs ? a.map((x, i) => {
-          const d = describeAct(x);
-          const desc = esc(d.desc); // plan-derived (building/slot/spell/etc.) — escape before innerHTML
-          return `<div class="q-line ${d.kind || ""}"><span class="q-desc">${desc}</span>${d.edit ? `<input class="q-num" type="number" inputmode="numeric" data-i="${i}" data-k="${esc(d.edit.key)}" value="${esc(d.edit.val)}" aria-label="${desc} amount">${d.edit.unit ? `<span class="q-unit">${esc(d.edit.unit)}</span>` : ""}` : ""}<button class="q-x" data-i="${i}" aria-label="remove">✕</button></div>`;
-        }).join("") : '<div class="ed-empty">no actions yet — pick a tab and add one</div>'}</div>
-        </div>
+        <div class="ed-queue" id="edQueue"></div>
       </div>`;
     root.querySelector(".ed-x").onclick = close;
     root.querySelectorAll(".ed-step").forEach((b) => (b.onclick = () => { open(hour + (+b.dataset.step)); deps.onNav && deps.onNav(hour); })); // sync the main-window playhead
     root.querySelectorAll(".ed-tab").forEach((b) => (b.onclick = () => { tab = b.dataset.tab; render(); }));
-    root.querySelectorAll(".q-x").forEach((b) => (b.onclick = () => removeAt(+b.dataset.i)));
-    root.querySelectorAll(".q-num").forEach((inp) => (inp.onchange = () => editQty(+inp.dataset.i, inp.dataset.k, inp.value)));
+    renderChrome();
     renderForm(w);
+  }
+  // The QUEUED-this-hour list (every action type for the current hour, inline-editable).
+  function queueListHtml() {
+    const a = acts(), nActs = a.length;
+    return `<div class="ed-queue-cap">QUEUED @ HOUR ${String(hour).padStart(2, "0")}</div>
+      <div class="ed-queue-list">${nActs ? a.map((x, i) => {
+        const d = describeAct(x); const desc = esc(d.desc); // plan-derived — escape before innerHTML
+        return `<div class="q-line ${d.kind || ""}"><span class="q-desc">${desc}</span>${d.edit ? `<input class="q-num" type="number" inputmode="numeric" data-i="${i}" data-k="${esc(d.edit.key)}" value="${esc(d.edit.val)}" aria-label="${desc} amount">${d.edit.unit ? `<span class="q-unit">${esc(d.edit.unit)}</span>` : ""}` : ""}<button class="q-x" data-i="${i}" aria-label="remove">✕</button></div>`;
+      }).join("") : '<div class="ed-empty">no actions yet — pick a tab and add one</div>'}</div>`;
+  }
+  // Re-render the budget strip + queue in place (after an embedded-window edit) WITHOUT rebuilding the
+  // form, so the window keeps its focus/selection. Re-prices off the freshly recomputed trace.
+  function renderChrome() {
+    const w = remainingWallet();
+    const b = document.getElementById("edBudget"); if (b) b.innerHTML = budgetStrip(w);
+    const q = document.getElementById("edQueue"); if (q) q.innerHTML = queueListHtml();
+    root.querySelectorAll(".q-x").forEach((x) => (x.onclick = () => removeAt(+x.dataset.i)));
+    root.querySelectorAll(".q-num").forEach((inp) => (inp.onchange = () => editQty(+inp.dataset.i, inp.dataset.k, inp.value)));
   }
 
   // A reusable add-form: builds the action from inputs, shows the max legal amount,
@@ -446,19 +518,23 @@ export function createEditor(deps) {
         const groups = LAND_TYPES.map((t) => [t, buildings.filter((b) => buildingLand(b) === t)]).filter(([, bs]) => bs.length);
         const picker = `<div class="bld-picker">${groups.map(([t, bs]) => `
           <div class="bld-group"><span class="bld-gh">${t}</span><div class="bld-chips">${bs.map((b) => `<button type="button" class="bld-chip ${b === buildSel ? "on" : ""}" data-b="${b}">${b.replace(/_/g, " ")}</button>`).join("")}</div></div>`).join("")}</div>`;
-        const refresh = mountForm(
-          `${sw}${picker}<div class="ed-grid1">${numField("p2", "count", 20, "--c-land")}</div><div class="ed-note" id="buildNote"></div>`,
-          () => ({ type: "construct", building: buildSel, n: vn("p2") }),
-          { verb: "queue construction", qtyField: "p2", note: (a) => `${int(a.n)}× ${a.building.replace(/_/g, " ")} — ${int(a.n * c.constructPlat)} plat, ${int(a.n * c.constructLumber)} lumber` }
-        );
-        const upd = () => { const n = document.getElementById("buildNote"); if (n) n.textContent = `${int(c.constructPlat)} plat + ${int(c.constructLumber)} lumber each · sits on ${buildingLand(buildSel)} land · 12h to build`; };
+        const host = document.getElementById("edForm");
+        host.innerHTML = `${sw}${picker}<div class="ed-note" id="buildNote"></div><div class="ed-hg" id="edHg"></div>`;
+        const mountSel = () => {
+          const n = document.getElementById("buildNote");
+          if (n) n.textContent = `${int(c.constructPlat)} plat + ${int(c.constructLumber)} lumber each · sits on ${buildingLand(buildSel)} land · 12h to build · type a count down the hours`;
+          mountHourGrid(document.getElementById("edHg"), windowOpts({
+            label: buildSel.replace(/_/g, " "), color: "--c-land", stateCols: buildStateCols,
+            read: (h) => laneRead(h, (a) => a.type === "construct" && a.building === buildSel),
+            write: (h, val) => laneWrite(h, (a) => a.type === "construct" && a.building === buildSel, () => ({ type: "construct", building: buildSel, n: val }), val),
+          }));
+        };
         document.querySelectorAll(".bld-chip").forEach((ch) => (ch.onclick = () => {
           buildSel = ch.dataset.b;
           document.querySelectorAll(".bld-chip").forEach((x) => x.classList.toggle("on", x === ch));
-          upd(); refresh();
+          mountSel();
         }));
-        upd();
-        tabFreeLandHint();
+        mountSel();
       } else {
         // DESTROY — raze owned buildings to barren land (instant, free, undo-able).
         edFormEl.classList.add("mode-danger");
@@ -472,48 +548,51 @@ export function createEditor(deps) {
       }
       wireDirSwitch((d) => { buildDir = d; renderForm(w); });
     } else if (tab === "rezone") {
-      const opts = LAND_TYPES.map((l) => `<option>${l}</option>`).join("");
-      const optsTo = LAND_TYPES.map((l) => `<option ${l === "swamp" ? "selected" : ""}>${l}</option>`).join("");
-      mountForm(
-        `<div class="ed-grid3">${selField("p1", "from", opts)}${selField("p2", "to", optsTo)}${numField("p3", "acres", 20, "--c-land")}</div>
-         <div class="ed-note">${int(c.rezonePlat)} plat per acre · only barren land can be rezoned</div>`,
-        () => ({ type: "rezone", from: v("p1"), to: v("p2"), n: vn("p3") }),
-        { verb: "rezone land", qtyField: "p3", note: (a) => `${int(a.n)} ${a.from}→${a.to} — ${int(a.n * c.rezonePlat)} plat` }
-      );
-      tabFreeLandHint();
+      renderRezoneTable(c);
     } else if (tab === "explore") {
       // Every land type is legally explorable in the round-50 game: LandHelper::getLandTypes()
       // returns all 7 and ExploreActionService accepts land_<type> for any of them (cost is
       // land-total-based, not type-based). Don't pre-restrict the option set — offer all 7.
-      const opt = LAND_TYPES.map((l) => `<option ${l === "plain" ? "selected" : ""}>${l}</option>`).join("");
-      mountForm(
-        `<div class="ed-grid2">${selField("p2", "land type", opt)}${numField("p1", "acres", 10, "--c-land")}</div>
-         <div class="ed-note">${int(c.explorePlat)} plat + ${int(c.exploreDraftee)} draftees per acre · arrives in 12h as that land type (skips a rezone) · costs morale</div>`,
-        () => ({ type: "explore", land: v("p2"), n: vn("p1") }),
-        { verb: "explore", qtyField: "p1", note: (a) => `${int(a.n)} ${a.land} — ${int(a.n * c.explorePlat)} plat, ${int(a.n * c.exploreDraftee)} draftees` }
-      );
+      const host = document.getElementById("edForm");
+      const chips = LAND_TYPES.map((t) => `<button type="button" class="bld-chip ${t === exploreSel ? "on" : ""}" data-t="${t}">${t}</button>`).join("");
+      host.innerHTML = `<div class="bld-group"><span class="bld-gh">explore — pick a land type</span><div class="bld-chips ed-terrain">${chips}</div></div><div class="ed-note" id="expNote"></div><div class="ed-hg" id="edHg"></div>`;
+      const mountSel = () => {
+        const n = document.getElementById("expNote");
+        if (n) n.textContent = `${int(c.explorePlat)} plat + ${int(c.exploreDraftee)} draftees per acre · arrives in 12h as ${exploreSel} (skips a rezone) · costs morale · type acres down the hours`;
+        mountHourGrid(document.getElementById("edHg"), windowOpts({
+          label: exploreSel, color: "--c-draftee", stateCols: spendStateCols,
+          read: (h) => laneRead(h, (a) => a.type === "explore" && (a.land || "plain") === exploreSel),
+          write: (h, val) => laneWrite(h, (a) => a.type === "explore" && (a.land || "plain") === exploreSel, () => ({ type: "explore", land: exploreSel, n: val }), val),
+        }));
+      };
+      host.querySelectorAll(".bld-chip").forEach((ch) => (ch.onclick = () => { exploreSel = ch.dataset.t; host.querySelectorAll(".bld-chip").forEach((x) => x.classList.toggle("on", x === ch)); mountSel(); }));
+      mountSel();
     } else if (tab === "train") {
       // Train|Release directional switch — release is the inverse of train (units → draftees →
       // peasants), one flip away instead of buried in Manage.
       const sw = dirSwitch(trainDir, [["train", "Train", ""], ["release", "Release", "demob"]]);
       if (trainDir === "train") {
-        // Exclude not_trainable units (e.g. Planewalker's summoned slots) — the game can't
-        // train them either.
-        const units = (meta().units || []).filter((u) => u.trainable !== false);
-        const slot = () => { const x = v("p1"); return /^\d+$/.test(x) ? +x : x; };
-        const unitOpts = units.map((u) => `<option value="${u.slot}">${u.name} · ${u.defense} DP (${u.kind})</option>`);
-        // Spies & wizards (500 platinum + 1 draftee) — trainable in protection. Assassins /
-        // archmages are omitted: the engine doesn't yet model their spy/wizard pairing cost.
-        if (c.train && c.train.spies) unitOpts.push(`<option value="spies">Spy · espionage</option>`);
-        if (c.train && c.train.wizards) unitOpts.push(`<option value="wizards">Wizard · magic</option>`);
-        mountForm(
-          `${sw}<div class="ed-grid2">${selField("p1", "unit", unitOpts.join(""))}${numField("p2", "count", 100, "--c-dp")}</div>
-           <div class="ed-note" id="trainNote"></div>`,
-          () => ({ type: "train", slot: slot(), n: vn("p2") }),
-          { verb: "train", qtyField: "p2", note: (a) => { const t = c.train[a.slot] || {}; const parts = Object.entries(t).map(([res, per]) => `${int(a.n * per)} ${res}`); return `${int(a.n)}× — ${[...parts, `${int(a.n)} draftees`].join(", ")}`; } }
-        );
-        const upd = () => { const t = c.train[slot()] || {}; const n = document.getElementById("trainNote"); if (n) n.textContent = `${Object.entries(t).map(([res, per]) => `${int(per)} ${res}`).join(" + ")} + 1 draftee each · spies/wizards & draftees are NOT counted toward the DP target`; };
-        document.getElementById("p1").addEventListener("change", upd); upd();
+        // Exclude not_trainable units (e.g. Planewalker's summoned slots) — the game can't train them.
+        const units = (meta().units || []).filter((u) => u.trainable !== false).map((u) => ({ slot: u.slot, name: u.name }));
+        // Spies & wizards (500 platinum + 1 draftee) — trainable in protection.
+        if (c.train && c.train.spies) units.push({ slot: "spies", name: "Spy" });
+        if (c.train && c.train.wizards) units.push({ slot: "wizards", name: "Wizard" });
+        if (!units.some((u) => String(u.slot) === String(trainSel))) trainSel = units[0] ? units[0].slot : 1;
+        const chips = units.map((u) => `<button type="button" class="bld-chip ${String(u.slot) === String(trainSel) ? "on" : ""}" data-s="${u.slot}">${u.name}</button>`).join("");
+        const host = document.getElementById("edForm");
+        host.innerHTML = `${sw}<div class="bld-group"><span class="bld-gh">train — pick a unit</span><div class="bld-chips ed-terrain">${chips}</div></div><div class="ed-note" id="trainNote"></div><div class="ed-hg" id="edHg"></div>`;
+        const mountSel = () => {
+          const t = c.train[trainSel] || {};
+          const n = document.getElementById("trainNote");
+          if (n) n.textContent = `${Object.entries(t).map(([res, per]) => `${int(per)} ${res}`).join(" + ") || "—"} + 1 draftee each · spies/wizards & draftees are NOT counted toward the DP target · type counts down the hours`;
+          mountHourGrid(document.getElementById("edHg"), windowOpts({
+            label: (units.find((u) => String(u.slot) === String(trainSel)) || {}).name || ("slot " + trainSel), color: "--c-dp", stateCols: spendStateCols,
+            read: (h) => laneRead(h, (a) => a.type === "train" && String(a.slot) === String(trainSel)),
+            write: (h, val) => laneWrite(h, (a) => a.type === "train" && String(a.slot) === String(trainSel), () => ({ type: "train", slot: trainSel, n: val }), val),
+          }));
+        };
+        host.querySelectorAll(".bld-chip").forEach((ch) => (ch.onclick = () => { const x = ch.dataset.s; trainSel = /^\d+$/.test(x) ? +x : x; host.querySelectorAll(".bld-chip").forEach((y) => y.classList.toggle("on", y === ch)); mountSel(); }));
+        mountSel();
       } else {
         // RELEASE — disband units → draftees, draftees → peasants (instant, free, undo-able).
         edFormEl.classList.add("mode-demob");
@@ -595,6 +674,69 @@ export function createEditor(deps) {
     const host = document.getElementById("edForm");
     const hint = el(`<div class="ed-landbar">${LAND_TYPES.map((l) => `<span class="lb ${free[l] < 0 ? "neg" : ""}"><b>${int(free[l])}</b> ${l}</span>`).join("")}</div>`);
     host.insertBefore(hint, host.querySelector(".ed-feedback"));
+  }
+
+  // Game-style rezone (mirrors the in-game Re-zone Land page): one row per land type with Owned %,
+  // Barren, and remove/add inputs — all 7 types visible at once, no dropdowns. The remove/add
+  // distribution (which must balance) is decomposed into the engine's {from,to,n} rezone actions for
+  // this hour, replacing any rezones already queued here.
+  function renderRezoneTable(c) {
+    const host = document.getElementById("edForm");
+    const r = entryRow();
+    const free = r.freeLandByType || {};
+    const landBy = r.landBy || {};
+    const total = r.land || 1;
+    const removes = {}, adds = {};
+    for (const a of acts()) if (a.type === "rezone") { removes[a.from] = (removes[a.from] || 0) + (a.n | 0); adds[a.to] = (adds[a.to] || 0) + (a.n | 0); }
+    const rows = LAND_TYPES.map((t) => {
+      const pct = total ? Math.round((landBy[t] || 0) / total * 100) : 0;
+      const home = t === homeLand() ? `<span class="rz-home">home</span>` : "";
+      return `<tr>
+        <td class="rz-type">${t}${home}</td>
+        <td class="rz-num">${int(landBy[t] || 0)} <span class="rz-pct">${pct}%</span></td>
+        <td class="rz-num">${int(free[t] || 0)}</td>
+        <td class="rz-cell"><input class="rz-remove" type="text" inputmode="numeric" autocomplete="off" data-t="${t}" value="${removes[t] || ""}" placeholder="0" aria-label="remove barren ${t}"></td>
+        <td class="rz-arrow">→</td>
+        <td class="rz-cell"><input class="rz-add" type="text" inputmode="numeric" autocomplete="off" data-t="${t}" value="${adds[t] || ""}" placeholder="0" aria-label="add ${t}"></td>
+      </tr>`;
+    }).join("");
+    host.innerHTML = `
+      <table class="rz-table">
+        <thead><tr><th>land type</th><th>owned</th><th>barren</th><th>remove</th><th></th><th>add to</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <div class="rz-balance" id="rzBalance"></div>
+      <div class="ed-note">${int(c.rezonePlat)} plat per barren acre · instant · the amount you remove must equal the amount you add</div>`;
+    const gather = (cls) => { let s = 0; const m = {}; host.querySelectorAll(cls).forEach((i) => { const x = Math.max(0, Math.floor(+i.value || 0)); if (x > 0) m[i.dataset.t] = x; s += x; }); return { s, m }; };
+    const balance = () => {
+      const rem = gather(".rz-remove"), add = gather(".rz-add");
+      const bal = document.getElementById("rzBalance");
+      if (bal) {
+        const cost = int(Math.max(rem.s, add.s) * c.rezonePlat);
+        bal.innerHTML = rem.s === add.s
+          ? (add.s > 0 ? `<span class="fb-ok">✓ ${int(add.s)} acres rezoned · ${cost} plat</span>` : `<span class="rz-dim">enter acres — barren of one type converts into another</span>`)
+          : `<span class="fb-warn">⚠ removing ${int(rem.s)} ≠ adding ${int(add.s)} · balance them (${int(Math.abs(rem.s - add.s))} off)</span>`;
+      }
+      return { rem, add };
+    };
+    const apply = () => {
+      const { rem, add } = balance();
+      const rl = Object.entries(rem.m).map(([t, q]) => ({ t, q })), al = Object.entries(add.m).map(([t, q]) => ({ t, q }));
+      const out = []; let i = 0, j = 0;
+      while (i < rl.length && j < al.length) { // greedy-pair removes→adds into from→to conversions
+        const n = Math.min(rl[i].q, al[j].q);
+        if (n > 0 && rl[i].t !== al[j].t) out.push({ type: "rezone", from: rl[i].t, to: al[j].t, n });
+        rl[i].q -= n; al[j].q -= n; if (rl[i].q === 0) i++; if (al[j].q === 0) j++;
+      }
+      deps.recordUndo("edit");
+      plan().hours[hour - 1] = acts().filter((a) => a.type !== "rezone").concat(out);
+      deps.recompute(hour).then(renderChrome);
+    };
+    host.querySelectorAll(".rz-remove,.rz-add").forEach((i) => {
+      i.oninput = () => { const cl = i.value.replace(/[^0-9]/g, ""); if (cl !== i.value) i.value = cl; balance(); };
+      i.onchange = apply;
+    });
+    balance();
   }
 
   function renderManage(c) {

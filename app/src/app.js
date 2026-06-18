@@ -486,8 +486,12 @@ function renderLedger(editHour = null) {
     const warnMsg = reason ? `overspent this hour — ${reason}`.replace(/"/g, "&quot;") : ""; // custom-tooltip text
     const postoop = r.hour >= OOP_HOUR;     // hour 49+ = out of protection
     const oop = r.hour === OOP_HOUR;        // the OOP row itself (the headline)
+    // L/P daily-bonus markers — a quiet at-a-glance cue for hours that claim the land or platinum bonus.
+    const claimL = (r.actions || []).some((a) => a.type === "claim_land");
+    const claimP = (r.actions || []).some((a) => a.type === "claim_platinum");
+    const claimMarks = `${claimL ? `<span class="k-claim k-claim-l" title="claims +20 land this hour">L</span>` : ""}${claimP ? `<span class="k-claim k-claim-p" title="claims the platinum bonus this hour">P</span>` : ""}`;
     html += `<tr data-h="${r.hour}" class="${day ? "is-day" : ""} ${r.hour === playhead ? "is-active" : ""} ${bad ? "is-infeas" : ""} ${r.hour === 0 ? "is-opening" : ""} ${postoop ? "is-postoop" : ""} ${oop ? "is-oop" : ""}">`;
-    html += `<td class="k-hour ${hasAct ? "has-action" : ""}"><span class="k-hour-n">${String(r.hour).padStart(2, "0")}</span>${reason ? `<span class="k-warn" tabindex="0" role="img" aria-label="${warnMsg}" data-warn="${warnMsg}">⚠</span>` : ""}</td>`;
+    html += `<td class="k-hour ${hasAct ? "has-action" : ""}"><span class="k-hour-n">${String(r.hour).padStart(2, "0")}</span>${claimMarks}${reason ? `<span class="k-warn" tabindex="0" role="img" aria-label="${warnMsg}" data-warn="${warnMsg}">⚠</span>` : ""}</td>`;
     for (const c of cols) {
       const v = c.get(r);
       const neg = v < 0;

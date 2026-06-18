@@ -589,3 +589,90 @@ body[data-reduced-motion="true"] .gate.latch { animation: none !important; }
 .tt-research { width: 100%; background: var(--c-land); color: #1a120c; border: 0; border-radius: 3px; padding: 7px 0; font-family: var(--font-display); font-weight: 700; font-size: 11px; letter-spacing: .06em; cursor: pointer; }
 .tt-research:hover:not(:disabled) { filter: brightness(1.08); }
 .tt-research:disabled { background: var(--panel); color: var(--text-faint); cursor: default; }
+
+
+/* ───────────────────────── opening templates (hour-0 editor) ───────────────────────── */
+.ed-tpl { margin-bottom: 14px; padding: 10px 12px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); }
+.ed-tpl-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+.ed-tpl-cap { font-size: 9px; letter-spacing: .18em; text-transform: uppercase; color: var(--c-land); font-weight: 600; }
+.ed-tpl-save { display: flex; gap: 6px; }
+.ed-tpl-name { width: 188px; background: var(--panel-3); border: 1px solid var(--line-strong); border-radius: 3px; color: var(--text); padding: 5px 8px; font-family: var(--font-mono); font-size: 12px; outline: none; }
+.ed-tpl-name:focus-visible { border-color: var(--c-land); box-shadow: 0 0 0 2px rgba(207,138,99,.22); }
+.ed-tpl-btn { background: var(--c-land); color: #1a120c; border: 0; border-radius: 3px; font-family: var(--font-display); font-weight: 700; font-size: 11px; letter-spacing: .04em; padding: 0 14px; cursor: pointer; }
+.ed-tpl-btn:hover { filter: brightness(1.08); }
+.ed-tpl-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.ed-tpl-chip { display: inline-flex; align-items: stretch; border: 1px solid var(--line-strong); border-radius: 4px; overflow: hidden; }
+.ed-tpl-chip.alt { opacity: .65; }
+.ed-tpl-apply { background: var(--panel-3); border: 0; color: var(--text); font-family: var(--font-mono); font-size: 11px; padding: 5px 9px; cursor: pointer; text-transform: capitalize; }
+.ed-tpl-apply:hover { background: rgba(207,138,99,.14); color: var(--c-land); }
+.ed-tpl-apply i { color: var(--text-faint); font-style: normal; margin-left: 2px; }
+.ed-tpl-del { background: var(--panel-3); border: 0; border-left: 1px solid var(--line); color: var(--text-faint); cursor: pointer; font-size: 11px; padding: 0 7px; }
+.ed-tpl-del:hover { color: var(--red); }
+.ed-tpl-empty { font-size: 11px; color: var(--text-faint); }
+
+
+/* ───────────────────────── embedded ±6h entry window (hour editor) ─────────────────────────
+   The rapid-entry column now lives INSIDE the Build / Explore / Train tabs — a compact window of
+   hours around the one you're editing, for the selected building / terrain / unit. Same matte
+   material; the current hour is marked, the state columns recompute live, days + OOP read at a
+   glance. Multi-select a span (shift) and fill it, or paste a column from Excel. */
+.ed-hg { margin-top: 12px; }
+.hg-table { border-collapse: separate; border-spacing: 0; width: 100%; }
+.hg-table th, .hg-table td { white-space: nowrap; }
+.hg-table thead th { position: sticky; top: 0; z-index: 1; background: var(--panel-2); font-size: 9px; letter-spacing: .05em; text-transform: uppercase; color: var(--col, var(--text-faint)); font-weight: 600; text-align: right; padding: 6px 9px; border-bottom: 1px solid var(--line-strong); }
+.hg-table thead th.hg-h-th { text-align: center; }
+.hg-h-th, .hg-h { width: 52px; min-width: 52px; text-align: center; }
+.hg-h { font-family: var(--font-mono); font-size: 11px; color: var(--text-faint); padding: 0 6px; border-bottom: 1px solid var(--line-soft); }
+.hg-now { color: var(--c-land); margin-left: 3px; font-size: 9px; }
+.hg-cell { padding: 0; border-bottom: 1px solid var(--line-soft); background: var(--ink); }
+.hg-in { width: 100%; min-width: 80px; box-sizing: border-box; border: 0; outline: none; background: transparent; color: var(--text); font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 13px; text-align: right; padding: 6px 10px; }
+.hg-in::placeholder { color: var(--text-faint); opacity: .4; }
+.hg-in:focus { background: rgba(207,138,99,.16); box-shadow: inset 0 0 0 1px var(--c-land); }
+.hg-cell.sel { background: rgba(207,138,99,.12); }
+.hg-state { width: 76px; min-width: 76px; text-align: right; padding: 6px 10px 6px 0; font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 11px; color: var(--text-dim); border-bottom: 1px solid var(--line-soft); background: var(--ink); }
+.hg-state.neg { color: var(--red); }
+.hg-row.hg-cur .hg-h { color: var(--c-land); font-weight: 600; }
+.hg-row.hg-cur .hg-cell, .hg-row.hg-cur .hg-state { background: rgba(207,138,99,.07); }
+.hg-row.hg-cur .hg-in:focus { background: rgba(207,138,99,.2); }
+.hg-row.hg-day .hg-h, .hg-row.hg-day td { border-bottom: 2px solid var(--line-strong); }
+.hg-row.hg-oop .hg-h { color: var(--green); box-shadow: inset 2px 0 0 var(--green); }
+.hg-row.hg-post .hg-state { background: rgba(95,208,138,.04); }
+.hg-h.sel { color: var(--c-land); }
+.hg-foot { display: flex; align-items: center; gap: 12px; margin-top: 8px; min-height: 26px; }
+.hg-hint { font-size: 10px; color: var(--text-faint); letter-spacing: .02em; }
+.hg-fill { margin-left: auto; display: flex; align-items: center; gap: 7px; }
+.hg-fill[hidden] { display: none; }
+.hg-fill-n { font-family: var(--font-mono); font-size: 11px; color: var(--c-land); }
+.hg-fill-in { width: 84px; background: var(--panel-3); border: 1px solid var(--line-strong); border-radius: 3px; color: var(--text); font-family: var(--font-mono); font-size: 12px; padding: 4px 8px; text-align: right; outline: none; }
+.hg-fill-in:focus-visible { border-color: var(--c-land); box-shadow: 0 0 0 2px rgba(207,138,99,.22); }
+.hg-fill-btn { background: var(--c-land); color: #1a120c; border: 0; border-radius: 3px; font-family: var(--font-display); font-weight: 700; font-size: 11px; letter-spacing: .04em; padding: 5px 11px; cursor: pointer; }
+.hg-fill-btn:hover { filter: brightness(1.08); }
+
+/* Explore / Train pickers reuse the build chips, laid out as one wrapping row */
+.ed-terrain { gap: 5px; }
+
+/* ───────────────────────── game-style rezone table ─────────────────────────
+   Mirrors the in-game Re-zone Land page: one row per land type, all visible, remove/add inline. */
+.rz-table { border-collapse: separate; border-spacing: 0; width: 100%; }
+.rz-table thead th { font-size: 9px; letter-spacing: .1em; text-transform: uppercase; color: var(--text-faint); font-weight: 600; text-align: right; padding: 6px 8px; border-bottom: 1px solid var(--line-strong); }
+.rz-table thead th:first-child { text-align: left; }
+.rz-table td { padding: 5px 8px; border-bottom: 1px solid var(--line-soft); font-family: var(--font-mono); font-size: 12px; }
+.rz-type { color: var(--text); text-transform: capitalize; }
+.rz-home { font-size: 8px; letter-spacing: .1em; text-transform: uppercase; color: var(--c-land); margin-left: 6px; vertical-align: middle; }
+.rz-num { text-align: right; color: var(--text-dim); }
+.rz-pct { color: var(--text-faint); font-size: 10px; }
+.rz-arrow { color: var(--text-faint); text-align: center; padding: 0; }
+.rz-cell { padding: 3px 6px; }
+.rz-remove, .rz-add { width: 100%; min-width: 64px; box-sizing: border-box; background: var(--panel-3); border: 1px solid var(--line-strong); border-radius: 3px; color: var(--text); font-family: var(--font-mono); font-size: 12px; text-align: right; padding: 5px 8px; outline: none; }
+.rz-remove { border-left: 2px solid var(--c-draftee); }
+.rz-add { border-left: 2px solid var(--c-land); }
+.rz-remove:focus-visible, .rz-add:focus-visible { border-color: var(--c-land); box-shadow: 0 0 0 2px rgba(207,138,99,.2); }
+.rz-balance { min-height: 20px; margin-top: 12px; font-family: var(--font-mono); font-size: 12px; }
+.rz-dim { color: var(--text-faint); }
+
+/* ───── ledger: L/P daily-bonus markers + a more legible day divider ───── */
+.k-claim { display: inline-block; margin-left: 4px; padding: 0 4px; border-radius: 3px; font-family: var(--font-mono); font-size: 9px; font-weight: 700; line-height: 14px; vertical-align: middle; }
+.k-claim-l { color: var(--c-land); background: rgba(207,138,99,.16); }
+.k-claim-p { color: var(--c-plat); background: rgba(217,178,90,.16); }
+/* the day boundary (every 24h) now reads as a clear rule, not a hairline */
+.ledger tbody tr.is-day td { border-bottom: 2px solid var(--line-strong); }

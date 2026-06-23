@@ -382,6 +382,14 @@ fn simulate(plan: Value) -> Result<Value, String> {
     if let Some(err) = plan::opening_build_error(&sc.opening_build, start_land) {
         return Err(err);
     }
+    // Reject illegal per-hour / OOP actions (negative or non-integer counts, unknown
+    // buildings/land/race) — the action-stream companion to the opening check above. A
+    // hand-edited import with a negative count would otherwise mint resources and corrupt
+    // the queues. Resource OVERSPEND is intentionally NOT rejected here (it's the honest
+    // negative-balance display the editor relies on).
+    if let Some(err) = plan::overture_plan_error(&plan) {
+        return Err(err);
+    }
 
     // states = [created, opening_build, building_phase_done, protection ticks 1..P,
     // (OOP-boundary snapshot), post-OOP ticks]. state_idx(H) is the dominion ENTERING hour H

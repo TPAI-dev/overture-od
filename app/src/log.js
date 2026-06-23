@@ -103,15 +103,26 @@ export function buildLog(plan, trace, meta) {
   const emit = (h, lines) => { if (lines.length) { out.push(header(h)); for (const l of lines) out.push(l); out.push(""); } };
 
   // ── hour 0: the free + instant opening build ───────────────────────────────
+  // The engine auto-fills any UNspecified starting acres as homes (plan.rs
+  // apply_starting_buildings), so the exported hour-0 build must include those implied homes —
+  // otherwise the log under-places acres, the game's import (which requires exactly the 350
+  // starting acres at hour 0) rejects it, AND it would replay a different opening than the app
+  // simulated. Over-specifying (>350) is the only remaining invalid case; the engine rejects it
+  // upstream (opening_build_error), and we still warn here.
+  const START_LAND = 350;
   const opening = plan.opening || {};
-  const ob = Object.entries(opening).filter(([, n]) => (n | 0) > 0);
+  const explicit = Object.entries(opening).filter(([, n]) => (n | 0) > 0);
+  const specified = explicit.reduce((s, [, n]) => s + (n | 0), 0);
+  const filled = new Map(explicit.map(([k, n]) => [k, n | 0]));
+  if (specified < START_LAND) filled.set("home", (filled.get("home") || 0) + (START_LAND - specified));
+  const ob = [...filled.entries()].filter(([, n]) => n > 0);
   if (ob.length) {
-    const sum = ob.reduce((s, [, n]) => s + (n | 0), 0);
+    const sum = ob.reduce((s, [, n]) => s + n, 0);
     const list = ob.map(([k, n]) => `${ig(n)} ${bldName(k)}`).join(", ");
     emit(0, [`Construction of ${list} started.`]);
-    if (sum !== 350) warnings.push(`Opening build places ${sum}/350 acres — the game builds ALL 350 starting acres at hour 0 and rejects any other count, so fill the opening to exactly 350 or hour 0 won't import.`);
+    if (sum !== START_LAND) warnings.push(`Opening build places ${sum}/${START_LAND} acres — the game builds ALL ${START_LAND} starting acres at hour 0 and rejects any other count, so trim the opening to exactly ${START_LAND} or hour 0 won't import.`);
   } else {
-    warnings.push("No opening build — add a 350-acre starting build (the 00 OPENING row) for a complete importable log.");
+    warnings.push(`No opening build — add a ${START_LAND}-acre starting build (the 00 OPENING row) for a complete importable log.`);
   }
 
   // ── all hours ───────────────────────────────────────────────────────────────
@@ -120,10 +131,15 @@ export function buildLog(plan, trace, meta) {
   // ignores hours 50+, so a full log stays import-valid AND is convenient to read. Hour 49
   // folds the OOP cast (oopActions, e.g. Ares) in front of that hour's own actions.
   const OOP_HOUR = 49;
-  const N = (plan.hours && plan.hours.length) || 48;
+  const oopActs = Array.isArray(plan.oopActions) ? plan.oopActions : [];
+  // Always walk through hour 49 when there's an OOP cast, so the OOP-boundary actions (e.g. the
+  // Ares cast) land in the exported log. A default 48-hour plan has no hour-49 slot of its own,
+  // but the engine still surfaces rows[49] as the OOP state — so without this the OOP cast the
+  // app shows would be silently dropped from the import log.
+  const N = Math.max((plan.hours && plan.hours.length) || 48, oopActs.length ? OOP_HOUR : 0);
   for (let h = 1; h <= N; h++) {
     let acts = (plan.hours && plan.hours[h - 1]) || [];
-    if (h === OOP_HOUR) acts = [...(Array.isArray(plan.oopActions) ? plan.oopActions : []), ...acts];
+    if (h === OOP_HOUR) acts = [...oopActs, ...acts];
     if (!acts.length) continue;
     // rows[h] is hour h's post-action state (A_H) — its costs price this hour and its `enter`
     // field carries the entering wallet renderHour re-gates spells/claims from.

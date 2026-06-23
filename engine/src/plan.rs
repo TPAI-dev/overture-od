@@ -459,14 +459,23 @@ pub fn apply_action(s: &mut DominionState, a: &Value) {
             }
         }
         "claim_platinum" => {
-            s.resource_platinum += s.peasants * 4;
-            s.resource_tech += 350;
-            s.daily_platinum = true;
+            // One claim per day. The game (DailyBonusesActionService) blocks a second claim
+            // until the daily flag resets on the 24h tick, and the log export re-gates the same
+            // way — so without this guard a plan that issues two claims in a day mints
+            // peasants*4 platinum (+350 research) twice, diverging UP from the real game.
+            if !s.daily_platinum {
+                s.resource_platinum += s.peasants * 4;
+                s.resource_tech += 350;
+                s.daily_platinum = true;
+            }
         }
         "claim_land" => {
-            let home = home_land(s); // race's home land type (DailyBonusesActionService)
-            add_land(s, &home, 20);
-            s.daily_land = true;
+            // One claim per day (see claim_platinum) — guard against a double-mint of land.
+            if !s.daily_land {
+                let home = home_land(s); // race's home land type (DailyBonusesActionService)
+                add_land(s, &home, 20);
+                s.daily_land = true;
+            }
         }
         other => {
             eprintln!("apply_action: unhandled {other}");
@@ -656,6 +665,121 @@ pub const KNOWN_BUILDINGS: [&str; 19] = [
 /// True if `b` (with or without a `building_` prefix) is a building the engine models.
 pub fn is_known_building(b: &str) -> bool {
     KNOWN_BUILDINGS.contains(&b.trim_start_matches("building_"))
+}
+
+/// The seven land types the engine models. Keys may appear with or without a `land_`
+/// prefix in imported actions; both forms are accepted.
+pub const KNOWN_LAND: [&str; 7] = [
+    "plain", "swamp", "hill", "mountain", "forest", "cavern", "water",
+];
+
+/// True if `t` (with or without a `land_` prefix) is a land type the engine models.
+pub fn is_known_land(t: &str) -> bool {
+    KNOWN_LAND.contains(&t.trim_start_matches("land_"))
+}
+
+/// Validate ONE OVERTURE shorthand action (the editor/import form, pre-reshape).
+/// Returns `Some(message)` for the first structural problem, or `None` if legal.
+/// `where_` is a human label for the location (e.g. "hour 5", "OOP") for the message.
+fn overture_action_error(a: &Value, where_: &str) -> Option<String> {
+    let t = a.get("type").and_then(Value::as_str).unwrap_or("");
+    // Count-bearing actions carry an integer amount that must be a NON-NEGATIVE integer.
+    // A negative count runs the cost math backwards (minting platinum/draftees) and pushes a
+    // negative amount into the build/train/explore queues; a non-integer would silently zero.
+    let count_field = match t {
+        "construct" | "destroy" | "explore" | "train" | "rezone" | "release" => Some("n"),
+        "bank" | "improve" => Some("amount"),
+        _ => None,
+    };
+    if let Some(field) = count_field {
+        match a.get(field) {
+            None | Some(Value::Null) => {}
+            Some(Value::Number(num)) => match num.as_i64() {
+                Some(i) if i < 0 => {
+                    return Some(format!("negative {field} in {t} action at {where_}: {i}"))
+                }
+                Some(_) => {}
+                None => {
+                    return Some(format!("non-integer {field} in {t} action at {where_}: {num}"))
+                }
+            },
+            Some(other) => {
+                return Some(format!("non-numeric {field} in {t} action at {where_}: {other}"))
+            }
+        }
+    }
+    // Unknown / non-buildable keys (same gate the opening build already enforces).
+    match t {
+        "construct" | "destroy" => {
+            if let Some(b) = a.get("building").and_then(Value::as_str) {
+                if !is_known_building(b) {
+                    return Some(format!("unknown building in {t} action at {where_}: \"{b}\""));
+                }
+            }
+        }
+        "explore" => {
+            if let Some(l) = a.get("land").and_then(Value::as_str) {
+                if !l.is_empty() && !is_known_land(l) {
+                    return Some(format!("unknown land in explore action at {where_}: \"{l}\""));
+                }
+            }
+        }
+        "rezone" => {
+            for key in ["from", "to"] {
+                if let Some(l) = a.get(key).and_then(Value::as_str) {
+                    if !is_known_land(l) {
+                        return Some(format!(
+                            "unknown land in rezone {key} at {where_}: \"{l}\""
+                        ));
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    None
+}
+
+/// Validate an imported/hand-edited OVERTURE plan's per-hour + OOP action stream BEFORE it
+/// is simulated. The action-stream companion to `opening_build_error`: it returns
+/// `Some(message)` for the first structurally-illegal action found, so a corrupt
+/// *.overture.json can't silently simulate a different (or impossible) dominion.
+///
+/// Rejected (illegal ACTIONS): negative or non-integer counts (`n` / bank·improve `amount`);
+/// unknown or non-buildable buildings; unknown land types; an unknown race.
+///
+/// NOT rejected (legal STATE): resource OVERSPEND. Going platinum/draftee/lumber-negative by
+/// over-spending is a legitimate, intentionally-surfaced balance in the editor — the
+/// honest-overspend display — not an illegal action, so it is left untouched.
+pub fn overture_plan_error(plan: &Value) -> Option<String> {
+    if let Some(race) = plan.get("race").and_then(Value::as_str) {
+        if !race.is_empty() && !data::get().races.contains_key(race) {
+            return Some(format!("unknown race: \"{race}\""));
+        }
+    }
+    if let Some(hours) = plan.get("hours").and_then(Value::as_array) {
+        for (h, hour) in hours.iter().enumerate() {
+            if let Some(acts) = hour.as_array() {
+                for a in acts {
+                    if let Some(err) = overture_action_error(a, &format!("hour {h}")) {
+                        return Some(err);
+                    }
+                }
+            }
+        }
+    }
+    if let Some(acts) = plan
+        .get("oopActions")
+        .or_else(|| plan.get("oop_actions"))
+        .and_then(Value::as_array)
+    {
+        for a in acts {
+            if let Some(err) = overture_action_error(a, "OOP") {
+                return Some(err);
+            }
+        }
+    }
+    None
 }
 
 /// Validate an imported opening build against the dominion's starting land. Returns

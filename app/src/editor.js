@@ -90,6 +90,8 @@ export function createEditor(deps) {
   const windowOpts = (extra) => Object.assign({
     center: hour, radius: 6, maxHour: plan().hours.length, oopHour: OOP_HOUR,
     rowAt, recordUndo: deps.recordUndo, recompute: deps.recompute, afterCommit: () => renderChrome(),
+    // ← / → step the editor's focal hour (re-centers the window), mirroring the ◀ ▶ header buttons.
+    onStepHour: (d) => { open(hour + d); deps.onNav && deps.onNav(hour); },
   }, extra);
 
   /* ───────── wallet (read straight off the post-instant-action row) ───────── */
@@ -780,7 +782,7 @@ export function createEditor(deps) {
     refresh();
   }
 
-  return { open, close, rerender, isOpen: () => !root.hidden, get hour() { return hour; } };
+  return { open, close, rerender, isOpen: () => !root.hidden, get hour() { return hour; }, stepHour: (d) => { if (root.hidden) return; open(hour + d); deps.onNav && deps.onNav(hour); } };
 }
 
 export function actLabel(a, meta) {

@@ -261,6 +261,14 @@ function onKey(e) {
   if (mod && e.key.toLowerCase() === "z") { e.preventDefault(); if (e.shiftKey) redo(); else undo(); return; }
   if (mod && e.key.toLowerCase() === "y") { e.preventDefault(); redo(); return; } // Windows redo
   if (/INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName)) return;
+  // While the editor popout is open, arrow keys navigate ITS hour (not the timeline behind it), and
+  // other main-screen nav keys are swallowed so the instrument doesn't move under the modal. (When a
+  // grid cell is focused the input early-return above already routed the event to the window itself.)
+  if (editor && editor.isOpen()) {
+    if (e.key === "ArrowLeft") { e.preventDefault(); editor.stepHour(-1); }
+    else if (e.key === "ArrowRight") { e.preventDefault(); editor.stepHour(1); }
+    return;
+  }
   if (e.key === "ArrowRight") { setPlayhead(playhead + (e.shiftKey ? 6 : 1)); e.preventDefault(); }
   else if (e.key === "ArrowLeft") { setPlayhead(playhead - (e.shiftKey ? 6 : 1)); e.preventDefault(); }
   else if (e.key === "Home") setPlayhead(0);

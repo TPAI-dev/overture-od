@@ -107,6 +107,19 @@ export function mountHourGrid(host, opts) {
     if (e.key === "Enter") { e.preventDefault(); focusCell(h + (e.shiftKey ? -1 : 1), false); }
     else if (e.key === "ArrowDown") { e.preventDefault(); focusCell(h + 1, e.shiftKey); }
     else if (e.key === "ArrowUp") { e.preventDefault(); focusCell(h - 1, e.shiftKey); }
+    else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+      // ← / → navigate between hours (step the editor's focal hour). Commit this cell's typed value
+      // first so it isn't lost when the window re-centers; step immediately if nothing changed.
+      // stopPropagation so the global key handler doesn't ALSO step (it would double up once the
+      // re-render defocuses this cell).
+      e.preventDefault(); e.stopPropagation();
+      const dir = e.key === "ArrowRight" ? 1 : -1;
+      const v = Math.max(0, Math.floor(+i.value || 0));
+      const changed = v !== opts.read(h);
+      if (changed) { opts.recordUndo("edit"); opts.write(h, v); i.value = v > 0 ? String(v) : ""; }
+      const go = () => opts.onStepHour && opts.onStepHour(dir);
+      changed ? opts.recompute(h).then(go) : go();
+    }
     else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "d") { e.preventDefault(); if (selRange()) fillRange(opts.read(anchor)); }
   });
   host.addEventListener("click", (e) => { if (e.target.id === "hgFillBtn") { const f = host.querySelector("#hgFillVal"); fillRange(Math.max(0, Math.floor(+((f && f.value) || 0)))); } });

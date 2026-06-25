@@ -682,3 +682,26 @@ body[data-reduced-motion="true"] .gate.latch { animation: none !important; }
 .hg-maxbtn { width: 100%; text-align: right; background: transparent; border: 0; color: var(--c-land); font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 11px; padding: 5px 9px; cursor: pointer; border-radius: 3px; }
 .hg-maxbtn:hover { background: rgba(207,138,99,.16); }
 .hg-row.hg-cur .hg-max { background: rgba(207,138,99,.07); }
+/* ───────────────────────── Magic — self-spell cards (no dropdown) ─────────────────────────
+   One card per castable self-spell; "keep up" maintains it through the plan (recast every 12h),
+   "cast once" is a single cast. Active spells get a green rail (they also show in the spine band). */
+.sp-list { display: flex; flex-direction: column; gap: 8px; }
+.sp-card { display: flex; align-items: center; gap: 14px; background: var(--panel-3); border: 1px solid var(--line-strong); border-left: 2px solid var(--c-mana); border-radius: var(--r); padding: 10px 13px; }
+.sp-card.up { border-left-color: var(--green); background: rgba(95,208,138,.05); }
+.sp-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.sp-name { font-size: 13px; color: var(--text); }
+.sp-name b { font-weight: 600; }
+.sp-eff { color: var(--text-faint); font-size: 11px; margin-left: 4px; }
+.sp-oop { font-size: 9px; letter-spacing: .08em; color: var(--amber); border: 1px solid var(--amber-d); border-radius: 3px; padding: 0 4px; margin-left: 4px; vertical-align: middle; }
+.sp-meta { font-family: var(--font-mono); font-size: 11px; display: flex; align-items: center; gap: 7px; }
+.sp-cost { color: var(--c-mana); }
+.sp-cost.short { color: var(--amber); }
+.sp-dot { color: var(--text-faint); }
+.sp-status { color: var(--text-faint); }
+.sp-status.up { color: var(--green); }
+.sp-actions { display: flex; flex-direction: column; gap: 5px; align-items: stretch; flex-shrink: 0; }
+.sp-keep { background: transparent; border: 1px solid var(--line-strong); color: var(--text-dim); border-radius: var(--r); padding: 7px 16px; font-family: var(--font-display); font-weight: 600; font-size: 11px; letter-spacing: .05em; cursor: pointer; white-space: nowrap; transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease); }
+.sp-keep:hover { border-color: var(--c-mana); color: var(--text); }
+.sp-keep.on { background: var(--c-mana); border-color: var(--c-mana); color: #0c0d10; }
+.sp-once { background: none; border: 0; color: var(--text-faint); font-family: var(--font-mono); font-size: 10px; cursor: pointer; padding: 0; }
+.sp-once:hover { color: var(--c-mana); text-decoration: underline; }

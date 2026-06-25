@@ -70,6 +70,9 @@ export function createEditor(deps) {
     plat: { key: "plat", label: "plat", c: "--c-plat", get: (r) => r.platinum },
     draft: { key: "draft", label: "draft", c: "--c-draftee", get: (r) => r.draftees },
     lumber: { key: "lumber", label: "lmbr", c: "--c-lumber", get: (r) => r.lumber },
+    ore: { key: "ore", label: "ore", c: "--c-ore", get: (r) => r.ore },
+    mana: { key: "mana", label: "mana", c: "--c-mana", get: (r) => r.mana },
+    gems: { key: "gems", label: "gems", c: "--c-gems", get: (r) => r.gems },
     dp: { key: "dp", label: "DP", c: "--c-dp", get: (r) => Math.round(r.trainedModded || 0) },
   };
   const buildStateCols = [SC.land, SC.plat, SC.lumber, SC.dp];
@@ -615,8 +618,13 @@ export function createEditor(deps) {
           const t = c.train[trainSel] || {};
           const n = document.getElementById("trainNote");
           if (n) n.textContent = `${Object.entries(t).map(([res, per]) => `${int(per)} ${res}`).join(" + ") || "—"} + 1 draftee each · spies/wizards & draftees are NOT counted toward the DP target · type counts down the hours`;
+          // State columns track what THIS unit actually spends: platinum, its secondary cost resource
+          // (ore / lumber / mana / gems — whichever this race's unit costs, if any), then draftees + DP.
+          const sc = [SC.plat];
+          for (const res of ["ore", "lumber", "mana", "gems"]) if ((t[res] || 0) > 0) sc.push(SC[res]);
+          sc.push(SC.draft, SC.dp);
           mountHourGrid(document.getElementById("edHg"), windowOpts({
-            label: (units.find((u) => String(u.slot) === String(trainSel)) || {}).name || ("slot " + trainSel), color: "--c-dp", stateCols: spendStateCols,
+            label: (units.find((u) => String(u.slot) === String(trainSel)) || {}).name || ("slot " + trainSel), color: "--c-dp", stateCols: sc,
             read: (h) => laneRead(h, (a) => a.type === "train" && String(a.slot) === String(trainSel)),
             write: (h, val) => laneWrite(h, (a) => a.type === "train" && String(a.slot) === String(trainSel), () => ({ type: "train", slot: trainSel, n: val }), val),
             maxAt: (h) => maxLaneAt(h, "train", trainSel),
@@ -638,23 +646,7 @@ export function createEditor(deps) {
       }
       wireDirSwitch((d) => { trainDir = d; renderForm(w); });
     } else if (tab === "magic") {
-      const active = Object.fromEntries((entryRow().spells || []).map((s) => [s.key, s.dur]));
-      // Per-race castable self-spells (common + racial), data-driven from meta. The c.spell gate
-      // is protection-aware: `invalid_protection` racial spells (e.g. Undead's Death and Decay)
-      // only have a cost entry — and so only appear here — at post-OOP hours (hour 49+). The ✦
-      // marks those out-of-protection-only spells.
-      const spells = (meta().spells || []).filter((sp) => (c.spell || {})[sp.key] != null);
-      const opt = spells.map((sp) => `<option value="${sp.key}">${sp.name}${sp.invalidProtection ? " ✦" : ""}${sp.desc ? " — " + sp.desc : ""}</option>`).join("")
-        || `<option value="">no self-spells${hour < OOP_HOUR ? " castable in protection" : ""}</option>`;
-      mountForm(
-        `<div class="ed-grid1">${selField("p1", "self-spell", opt)}</div>
-         <div class="ed-note" id="spellNote"></div>`,
-        () => ({ type: "spell", spell: v("p1") }),
-        { verb: "cast spell", note: (a) => { const cost = (c.spell || {})[a.spell] || 0, have = remainingWallet().mana; return cost <= have ? `casts — ${int(cost)} of ${int(have)} mana, lasts 12h` : `⚠ only ${int(have)} mana (needs ${int(cost)}) — will NOT cast this hour`; } }
-      );
-      const invalidProt = new Set(spells.filter((sp) => sp.invalidProtection).map((sp) => sp.key));
-      const upd = () => { const k = v("p1"); const n = document.getElementById("spellNote"); const act = active[k]; const cost = (c.spell || {})[k] || 0, have = remainingWallet().mana; if (n) n.innerHTML = `${int(cost)} mana · ${cost <= have ? `<span style="color:var(--green)">✓ ${int(have)} available</span>` : `<span style="color:var(--amber)">⚠ only ${int(have)} — won't cast yet</span>`}${act ? ` · active ${act}h (re-cast refreshes)` : ""}${invalidProt.has(k) ? ` · <span style="color:var(--amber)">✦ out-of-protection spell</span>` : ""}`; };
-      document.getElementById("p1").addEventListener("change", upd); upd();
+      renderMagic();
     } else if (tab === "bank") {
       const so = BANKABLE.filter(showRes).map((s) => `<option value="resource_${s}">${s}</option>`).join("");
       const toRes = ["ore", "lumber", "platinum", "food"].filter(showRes);
@@ -768,6 +760,54 @@ export function createEditor(deps) {
       i.onchange = apply;
     });
     balance();
+  }
+
+  // ───────── Magic — one card per self-spell, no dropdown. "keep up" maintains the spell from this
+  // hour through the plan (one cast + a recast every 12h on expiry); "cast once" is a single cast. ─────────
+  function setKeepUp(key, on) {
+    deps.recordUndo("edit");
+    const p = plan();
+    p.maintain = p.maintain || {};
+    if (on) {
+      p.maintain[key] = hour; // store intent only; recompute()'s syncMaintainedSpells derives + maintains the casts (and auto-extends if hours are later added)
+    } else {
+      delete p.maintain[key];
+      const N = p.hours.length;
+      for (let h = 1; h <= N; h++) { const l = p.hours[h - 1]; if (l && l.length) p.hours[h - 1] = l.filter((a) => !(a.type === "spell" && a.spell === key)); }
+    }
+    deps.recompute(hour).then(() => { renderChrome(); renderMagic(); });
+  }
+  function castSpellOnce(key) {
+    deps.recordUndo("edit");
+    (plan().hours[hour - 1] || (plan().hours[hour - 1] = [])).push({ type: "spell", spell: key });
+    deps.recompute(hour).then(() => { renderChrome(); renderMagic(); });
+  }
+  function renderMagic() {
+    const host = document.getElementById("edForm");
+    const row = entryRow();
+    const costs = (row.costs && row.costs.spell) || {};
+    const active = new Map((row.spells || []).map((s) => [s.key, s.dur])); // active at THIS hour
+    const have = remainingWallet().mana;
+    const spells = (meta().spells || []).filter((sp) => costs[sp.key] != null); // protection-aware (OOP-only racials absent in protection)
+    if (!spells.length) { host.innerHTML = `<div class="ed-empty">no self-spells castable ${hour < OOP_HOUR ? "in protection" : "here"}</div>`; return; }
+    const hh = String(hour).padStart(2, "0");
+    host.innerHTML = `<div class="sp-list">${spells.map((sp) => {
+      const cost = costs[sp.key] || 0, up = active.has(sp.key), dur = active.get(sp.key) || 0;
+      const kept = !!(plan().maintain && plan().maintain[sp.key]), afford = have >= cost;
+      return `<div class="sp-card ${up ? "up" : ""}">
+        <div class="sp-info">
+          <div class="sp-name"><b>${esc(sp.name)}</b>${sp.invalidProtection ? ` <span class="sp-oop">✦ OOP</span>` : ""}${sp.desc ? ` <span class="sp-eff">${esc(sp.desc)}</span>` : ""}</div>
+          <div class="sp-meta"><span class="sp-cost ${afford ? "" : "short"}">${int(cost)} mana</span><span class="sp-dot">·</span><span class="sp-status ${up ? "up" : ""}">${up ? `active ${dur}h` : "not active"}</span></div>
+        </div>
+        <div class="sp-actions">
+          <button class="sp-keep ${kept ? "on" : ""}" data-k="${esc(sp.key)}" title="${kept ? "stop maintaining" : "maintain from hour " + hh + " through the plan"}">${kept ? "✓ keeping up" : "keep up"}</button>
+          <button class="sp-once" data-k="${esc(sp.key)}">cast once @ ${hh}</button>
+        </div>
+      </div>`;
+    }).join("")}</div>
+    <div class="ed-note"><b>keep up</b> maintains the spell from hour ${hh} through the plan — a cast now plus a recast every 12h on expiry (no dropdown, no hand-recasting). <b>cast once</b> casts a single time. Mana cost scales with land; a cast that can't afford its mana is flagged on its hour.</div>`;
+    host.querySelectorAll(".sp-keep").forEach((b) => (b.onclick = () => setKeepUp(b.dataset.k, !b.classList.contains("on"))));
+    host.querySelectorAll(".sp-once").forEach((b) => (b.onclick = () => castSpellOnce(b.dataset.k)));
   }
 
   function renderManage(c) {
@@ -913,6 +953,22 @@ function spellShortfall(r) {
     mana -= cost;
   }
   return null;
+}
+
+// Maintained self-spells ("keep up"): plan.maintain maps spellKey → the hour the user started keeping
+// it up. The casts are DERIVED here (every recompute, before simulate) so they always cover the
+// CURRENT plan length — extend the sim and the recast pattern re-derives into the new hours instead of
+// the spell silently dropping off; shrink it and the surplus casts fall away. Spells NOT in maintain
+// (one-off "cast once", or older saved builds) are left untouched.
+export function syncMaintainedSpells(plan) {
+  const m = plan && plan.maintain;
+  if (!m || !Array.isArray(plan.hours)) return;
+  const N = plan.hours.length;
+  for (const key of Object.keys(m)) {
+    const from = m[key] | 0;
+    for (let h = 1; h <= N; h++) { const l = plan.hours[h - 1]; if (l && l.length) plan.hours[h - 1] = l.filter((a) => !(a.type === "spell" && a.spell === key)); }
+    if (from >= 1) for (let h = from; h <= N; h += 12) (plan.hours[h - 1] || (plan.hours[h - 1] = [])).push({ type: "spell", spell: key });
+  }
 }
 // First spendable resource / barren land type the row drives negative, as a short label.
 function rowOverspend(r) {

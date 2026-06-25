@@ -1,7 +1,7 @@
 import { engine } from "./bridge.js";
 import { Spine } from "./spine.js";
 import { Charts } from "./charts.js";
-import { createEditor, scanFeasibility, platinumFlow } from "./editor.js";
+import { createEditor, scanFeasibility, platinumFlow, syncMaintainedSpells } from "./editor.js";
 import { createSaves } from "./saves.js";
 import { buildLog, downloadLog } from "./log.js";
 
@@ -290,6 +290,7 @@ async function recompute(editHour = null) {
   // persistent banner, and still RESOLVE so callers' `.then(render)` runs and the UI stays
   // live. The next successful sim calls clearSimError(), so correcting the offending action
   // makes the error disappear on its own — no stale error left frozen on screen.
+  syncMaintainedSpells(plan); // re-derive "keep up" spell casts to the current plan length (auto-extends when hours are added)
   let next;
   try {
     next = await engine.simulate(plan);

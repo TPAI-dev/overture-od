@@ -29,6 +29,7 @@ export function mountHourGrid(host, opts) {
     body += `<tr class="hg-row ${cls}">
       <td class="hg-h" data-h="${h}">${pad(h)}${h === center ? '<span class="hg-now">◂</span>' : ""}</td>
       <td class="hg-cell"><input class="hg-in" type="text" inputmode="numeric" autocomplete="off" data-h="${h}" value="${v > 0 ? v : ""}" placeholder="0" aria-label="${esc(opts.label)} hour ${pad(h)}"></td>
+      ${opts.maxAt ? `<td class="hg-max"><button type="button" class="hg-maxbtn" data-h="${h}" title="fill to max">—</button></td>` : ""}
       ${stateCols.map((c) => `<td class="hg-state" id="hg-${h}-${c.key}">—</td>`).join("")}
     </tr>`;
   }
@@ -37,12 +38,13 @@ export function mountHourGrid(host, opts) {
       <thead><tr>
         <th class="hg-h-th">H</th>
         <th class="hg-col-th" style="--col:var(${opts.color || "--c-land"})">${esc(opts.label)}</th>
+        ${opts.maxAt ? `<th class="hg-max-th">max</th>` : ""}
         ${stateCols.map((c) => `<th class="hg-state-th" style="--col:var(${c.c})">${c.label}</th>`).join("")}
       </tr></thead>
       <tbody>${body}</tbody>
     </table>
     <div class="hg-foot">
-      <span class="hg-hint"><kbd>↵</kbd> next hr&nbsp; <kbd>⇧↵</kbd> up&nbsp; <kbd>⇧</kbd>+click/<kbd>↑↓</kbd> span&nbsp; <kbd>⌘D</kbd> fill&nbsp; · paste a column</span>
+      <span class="hg-hint"><kbd>↵</kbd> next hr&nbsp; <kbd>←→</kbd> hours&nbsp; <kbd>⇧</kbd>+<kbd>↑↓</kbd> span&nbsp; <kbd>⌘D</kbd> fill&nbsp; · tap a <b>max</b> to fill it</span>
       <span class="hg-fill" id="hgFill" hidden></span>
     </div>`;
   const tbody = host.querySelector(".hg-table tbody");
@@ -58,6 +60,10 @@ export function mountHourGrid(host, opts) {
         cell.textContent = int(v);
         cell.classList.toggle("neg", v < 0);
       }
+    }
+    if (opts.maxAt) for (let h = lo; h <= hi; h++) {
+      const m = opts.maxAt(h) || {}, b = host.querySelector(`.hg-maxbtn[data-h="${h}"]`);
+      if (b) { b.textContent = int(m.n || 0); b.title = m.why ? `max — limited by ${m.why}` : "fill to max"; }
     }
   }
   function selRange() {
@@ -122,7 +128,16 @@ export function mountHourGrid(host, opts) {
     }
     else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "d") { e.preventDefault(); if (selRange()) fillRange(opts.read(anchor)); }
   });
-  host.addEventListener("click", (e) => { if (e.target.id === "hgFillBtn") { const f = host.querySelector("#hgFillVal"); fillRange(Math.max(0, Math.floor(+((f && f.value) || 0)))); } });
+  host.addEventListener("click", (e) => {
+    if (e.target.id === "hgFillBtn") { const f = host.querySelector("#hgFillVal"); return fillRange(Math.max(0, Math.floor(+((f && f.value) || 0)))); }
+    const mb = e.target.closest(".hg-maxbtn"); // tap an hour's "max" → fill that hour to its max legal count
+    if (mb && opts.maxAt) {
+      const h = +mb.dataset.h, v = Math.max(0, (opts.maxAt(h) || { n: 0 }).n | 0);
+      if (v !== opts.read(h)) { opts.recordUndo("edit"); opts.write(h, v); }
+      const inp = inpOf(h); if (inp) inp.value = v > 0 ? String(v) : "";
+      opts.recompute(h).then(() => { refreshState(); opts.afterCommit && opts.afterCommit(h); });
+    }
+  });
   host.addEventListener("paste", (e) => {
     const i = e.target.closest && e.target.closest(".hg-in"); if (!i) return;
     const text = (e.clipboardData || window.clipboardData).getData("text"); if (text == null) return;

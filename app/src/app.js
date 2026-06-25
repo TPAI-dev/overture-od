@@ -223,7 +223,7 @@ async function init() {
     const warns = [...warnings];
     if (infeasible.length) {
       const f = infeasible[0];
-      warns.push(`${infeasible.length} overspent ${infeasible.length === 1 ? "hour" : "hours"} (h${String(f.hour).padStart(2, "0")} ${f.reason}) — the in-game import may stop there.`);
+      warns.push(`${infeasible.length} flagged ${infeasible.length === 1 ? "hour" : "hours"} (h${String(f.hour).padStart(2, "0")} ${f.reason}) — the in-game import may stop there.`);
     }
     if (warns.length) toast(`⚠ exported <b>${fname}</b> · ${warns.join(" · ")}`, "warn");
     else toast(`⇩ exported <b>${fname}</b> — ${hours} protection ${hours === 1 ? "hour" : "hours"}, ready to import`, "ok");
@@ -450,7 +450,7 @@ function clearSimError() {
 
 function markers() {
   const m = [];
-  const har = trace.rows.find((r) => r.spells.some((s) => s.key === "harmony")); if (har) m.push({ hour: har.hour, label: "Harmony", color: "#7e86d6" });
+  // self-spells now render as duration bars in the spine's spell band (see spine.js), not point flags.
   const exp = trace.rows.find((r) => r.incoming > 0); if (exp) m.push({ hour: exp.hour, label: "explore", color: "#6aa8d8" });
   const def = trace.rows.find((r) => r.military.u2 + r.military.u3 > 0); if (def) m.push({ hour: def.hour, label: "defense", color: "#d8d2c2" });
   // OUT OF PROTECTION — hour 49, the headline. `oop: true` makes the spine render it as a
@@ -491,7 +491,7 @@ function renderLedger(editHour = null) {
     const hasAct = (r.actions || []).length > 0;
     const reason = badReason.get(r.hour);    // overspend reason for this hour, if any
     const bad = reason != null;
-    const warnMsg = reason ? `overspent this hour — ${reason}`.replace(/"/g, "&quot;") : ""; // custom-tooltip text
+    const warnMsg = reason ? String(reason).replace(/"/g, "&quot;") : ""; // custom-tooltip text (reason is self-describing)
     const postoop = r.hour >= OOP_HOUR;     // hour 49+ = out of protection
     const oop = r.hour === OOP_HOUR;        // the OOP row itself (the headline)
     // L/P daily-bonus markers — a quiet at-a-glance cue for hours that claim the land or platinum bonus.

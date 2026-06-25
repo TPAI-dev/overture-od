@@ -4,11 +4,16 @@
 
 const C = {
   land: "#cf8a63", landFill: "rgba(207,138,99,.16)", draftee: "#6aa8d8", dp: "#d8d2c2",
-  mana: "#7e86d6", plat: "#d9b25a", green: "#5fd08a", amber: "#e3a93f",
+  mana: "#7e86d6", plat: "#d9b25a", food: "#7ec27a", ore: "#c2705a", green: "#5fd08a", amber: "#e3a93f",
   line: "#262a32", faint: "#5e6571", dim: "#9aa0ab", grid: "#1d2128", panel: "#14161b",
 };
-const PAD = 18, TOP = 10, CURVE_H = 40, TICK_Y = 56, ACT_Y0 = 64, ACT_Y1 = 86;
-const ACT_COLOR = { construct: C.land, rezone: C.faint, explore: C.draftee, train: C.dp, spell: C.mana, bank: C.plat, claim_platinum: C.plat, claim_land: C.land };
+const PAD = 18, TOP = 8, CURVE_H = 28, TICK_Y = 44, FLAG_Y = 42, SPELL_Y0 = 60, LANE_H = 8, MAX_LANES = 4;
+// Self-spell bars are coloured by the resource their effect touches (on-theme with the rest of the
+// instrument): Midas → platinum gold, Gaia's → food green, Mining → ore, Ares → defence, the rest mana.
+const SPELL_COLOR = { midas_touch: C.plat, gaias_watch: C.food, mining_strength: C.ore, ares_call: C.dp, harmony: C.mana };
+const SPELL_SHORT = { midas_touch: "Midas", gaias_watch: "Gaia's", mining_strength: "Mining", ares_call: "Ares", harmony: "Harmony" };
+const spellColor = (key) => SPELL_COLOR[key] || C.mana;
+const spellLabel = (key) => SPELL_SHORT[key] || key.replace(/_/g, " ");
 
 export class Spine {
   constructor(canvas, onScrub) {
@@ -64,6 +69,19 @@ export class Spine {
   xOf(h) { return PAD + (h / this.mh()) * (this.W - 2 * PAD); }
   hourFromX(x) { const m = this.mh(); return Math.max(0, Math.min(m, Math.round(((x - PAD) / (this.W - 2 * PAD)) * m))); }
 
+  // Contiguous runs (start hour → first hour absent) where each self-spell is active, from the
+  // per-row active-spell list. Recasts on expiry read as one continuous span; a gap breaks it.
+  spellSpans() {
+    const spans = [], active = {};
+    this.rows.forEach((r, i) => {
+      const present = new Set((r.spells || []).map((s) => s.key));
+      for (const key in active) if (!present.has(key)) { spans.push({ key, start: active[key], end: i }); delete active[key]; }
+      present.forEach((key) => { if (active[key] == null) active[key] = i; });
+    });
+    for (const key in active) spans.push({ key, start: active[key], end: this.rows.length });
+    return spans.sort((a, b) => a.start - b.start || a.key.localeCompare(b.key));
+  }
+
   draw() {
     const { ctx } = this; if (!this.W) return;
     ctx.clearRect(0, 0, this.W, this.H);
@@ -102,14 +120,23 @@ export class Spine {
       ctx.strokeStyle = C.land; ctx.lineWidth = 1.5; ctx.stroke();
     }
 
-    // per-hour action density (stacked small ticks by type)
-    this.rows.forEach((r, i) => {
-      const acts = r.actions || []; if (!acts.length || i === 0) return;
-      const x = this.xOf(i); let y = ACT_Y1;
-      acts.slice(0, 5).forEach((a) => {
-        ctx.fillStyle = ACT_COLOR[a.type] || C.dim;
-        ctx.fillRect(x - 1.5, y - 4, 3, 4); y -= 5;
-      });
+    // self-spell duration band — each active spell is a horizontal bar over the hours it's up,
+    // packed into lanes so concurrent spells stack rather than collide.
+    const spans = this.spellSpans();
+    const laneEnd = [];
+    ctx.textBaseline = "middle";
+    spans.forEach((sp) => {
+      let lane = laneEnd.findIndex((end) => end <= sp.start);
+      if (lane === -1) lane = laneEnd.length;
+      if (lane >= MAX_LANES) return; // overflow guard (rare: >4 concurrent spells)
+      laneEnd[lane] = sp.end;
+      const y = SPELL_Y0 + lane * LANE_H, bh = LANE_H - 2;
+      const x0 = this.xOf(sp.start), x1 = this.xOf(Math.min(sp.end, mh)), w = Math.max(3, x1 - x0);
+      ctx.globalAlpha = 0.92; ctx.fillStyle = spellColor(sp.key); ctx.fillRect(x0, y, w, bh); ctx.globalAlpha = 1;
+      ctx.save(); ctx.beginPath(); ctx.rect(x0, y, w, bh); ctx.clip();
+      ctx.fillStyle = "#0c0d10"; ctx.font = "700 8px 'Space Grotesk', sans-serif"; ctx.textAlign = "left";
+      ctx.fillText(spellLabel(sp.key), x0 + 4, y + bh / 2 + 0.5);
+      ctx.restore();
     });
 
     // event flags
@@ -127,7 +154,7 @@ export class Spine {
         ctx.restore();
         return;
       }
-      ctx.strokeStyle = m.color; ctx.globalAlpha = .5; ctx.beginPath(); ctx.moveTo(x, TOP); ctx.lineTo(x, ACT_Y1); ctx.stroke(); ctx.globalAlpha = 1;
+      ctx.strokeStyle = m.color; ctx.globalAlpha = .5; ctx.beginPath(); ctx.moveTo(x, TOP); ctx.lineTo(x, FLAG_Y); ctx.stroke(); ctx.globalAlpha = 1;
       ctx.fillStyle = m.color; ctx.beginPath(); ctx.moveTo(x, TOP - 2); ctx.lineTo(x + 5, TOP - 6); ctx.lineTo(x, TOP - 6); ctx.closePath(); ctx.fill();
       ctx.fillStyle = C.dim; ctx.fillText(m.label, x + 4, TOP + 2);
     });

@@ -141,7 +141,7 @@ select.field-input { text-transform: capitalize; cursor: pointer; }
   padding: 8px 18px 6px;
 }
 .spine-rail { position: relative; }
-.spine-canvas { display: block; width: 100%; height: 92px; cursor: ew-resize; border-radius: var(--r); outline: none; }
+.spine-canvas { display: block; width: 100%; height: 112px; cursor: ew-resize; border-radius: var(--r); outline: none; }
 .spine-canvas:focus-visible { box-shadow: 0 0 0 2px rgba(207,138,99,.35); }
 .spine-readout { display: flex; justify-content: space-between; align-items: center; margin-top: 4px; }
 .readout-hour { font-size: 10px; letter-spacing: .12em; color: var(--text-dim); text-transform: uppercase; }
@@ -676,3 +676,9 @@ body[data-reduced-motion="true"] .gate.latch { animation: none !important; }
 .k-claim-p { color: var(--c-plat); background: rgba(217,178,90,.16); }
 /* the day boundary (every 24h) now reads as a clear rule, not a hairline */
 .ledger tbody tr.is-day td { border-bottom: 2px solid var(--line-strong); }
+/* embedded window — the per-hour "max legal" column (tap a number to fill that hour to its max) */
+.hg-max-th { text-align: right; width: 58px; min-width: 58px; }
+.hg-max { text-align: right; padding: 0; border-bottom: 1px solid var(--line-soft); background: var(--ink); }
+.hg-maxbtn { width: 100%; text-align: right; background: transparent; border: 0; color: var(--c-land); font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 11px; padding: 5px 9px; cursor: pointer; border-radius: 3px; }
+.hg-maxbtn:hover { background: rgba(207,138,99,.16); }
+.hg-row.hg-cur .hg-max { background: rgba(207,138,99,.07); }

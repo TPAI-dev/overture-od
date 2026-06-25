@@ -85,6 +85,32 @@ export function createEditor(deps) {
     plan().hours[h - 1] = keep;
   }
   const rowAt = (h) => { const rows = deps.getTrace().rows; return rows[Math.min(rows.length - 1, h)]; };
+  const matchOf = (type, key) => {
+    if (type === "construct") return (a) => a.type === "construct" && a.building === key;
+    if (type === "explore") return (a) => a.type === "explore" && (a.land || "plain") === key;
+    return (a) => a.type === "train" && String(a.slot) === String(key);
+  };
+  // Max legal count for a lane at hour h: the hour's wallet with this lane's CURRENT spend added back
+  // (so the figure is the cell's total capacity, correct even when it's currently overspent), fed to
+  // the same maxDetailed() the old per-action "max legal" button used. Returns { n, why }.
+  function maxLaneAt(h, type, key) {
+    const row = rowAt(h);
+    if (!row || !row.costs) return { n: 0, why: "" };
+    const w = freshWallet(row), c = row.costs, cur = laneRead(h, matchOf(type, key));
+    if (type === "construct") {
+      const lt = buildingLand(key);
+      w.platinum += cur * c.constructPlat; w.lumber += cur * c.constructLumber; w.free[lt] = (w.free[lt] || 0) + cur;
+      return maxDetailed(w, { type, building: key, n: 0 });
+    }
+    if (type === "explore") {
+      w.platinum += cur * c.explorePlat; w.draftees += cur * c.exploreDraftee;
+      return maxDetailed(w, { type, land: key, n: 0 });
+    }
+    const t = c.train[key] || {};
+    for (const [res, per] of Object.entries(t)) w[res] += cur * per;
+    w.draftees += cur;
+    return maxDetailed(w, { type, slot: key, n: 0 });
+  }
   // Shared opts for every embedded window: centered on the current editor hour, refreshing the
   // budget strip + queue (not the form) after each commit so the window keeps focus.
   const windowOpts = (extra) => Object.assign({
@@ -529,6 +555,7 @@ export function createEditor(deps) {
             label: buildSel.replace(/_/g, " "), color: "--c-land", stateCols: buildStateCols,
             read: (h) => laneRead(h, (a) => a.type === "construct" && a.building === buildSel),
             write: (h, val) => laneWrite(h, (a) => a.type === "construct" && a.building === buildSel, () => ({ type: "construct", building: buildSel, n: val }), val),
+            maxAt: (h) => maxLaneAt(h, "construct", buildSel),
           }));
         };
         document.querySelectorAll(".bld-chip").forEach((ch) => (ch.onclick = () => {
@@ -565,6 +592,7 @@ export function createEditor(deps) {
           label: exploreSel, color: "--c-draftee", stateCols: spendStateCols,
           read: (h) => laneRead(h, (a) => a.type === "explore" && (a.land || "plain") === exploreSel),
           write: (h, val) => laneWrite(h, (a) => a.type === "explore" && (a.land || "plain") === exploreSel, () => ({ type: "explore", land: exploreSel, n: val }), val),
+          maxAt: (h) => maxLaneAt(h, "explore", exploreSel),
         }));
       };
       host.querySelectorAll(".bld-chip").forEach((ch) => (ch.onclick = () => { exploreSel = ch.dataset.t; host.querySelectorAll(".bld-chip").forEach((x) => x.classList.toggle("on", x === ch)); mountSel(); }));
@@ -591,6 +619,7 @@ export function createEditor(deps) {
             label: (units.find((u) => String(u.slot) === String(trainSel)) || {}).name || ("slot " + trainSel), color: "--c-dp", stateCols: spendStateCols,
             read: (h) => laneRead(h, (a) => a.type === "train" && String(a.slot) === String(trainSel)),
             write: (h, val) => laneWrite(h, (a) => a.type === "train" && String(a.slot) === String(trainSel), () => ({ type: "train", slot: trainSel, n: val }), val),
+            maxAt: (h) => maxLaneAt(h, "train", trainSel),
           }));
         };
         host.querySelectorAll(".bld-chip").forEach((ch) => (ch.onclick = () => { const x = ch.dataset.s; trainSel = /^\d+$/.test(x) ? +x : x; host.querySelectorAll(".bld-chip").forEach((y) => y.classList.toggle("on", y === ch)); mountSel(); }));
@@ -862,17 +891,35 @@ export function scanFeasibility(trace) {
   for (let h = 1; h < rows.length; h++) {
     const r = rows[h];
     if (!r) continue;
-    const reason = rowOverspend(r);
+    const reason = rowOverspend(r) || spellShortfall(r);
     if (reason) bad.push({ hour: r.hour, reason });
   }
   return bad;
 }
+// A queued self-spell that can't actually cast — its mana cost (which scales with land) exceeds the
+// mana available when it fires. The engine silently SKIPS such a cast (no negative balance), so the
+// overspend scan misses it; this catches it. Replays the hour's spells against the ENTERING mana
+// (row.enter.mana — exactly what the engine gates on), so e.g. a later land bonus that raises the
+// cost above the mana on hand is flagged instead of silently no-op-ing the cast.
+function spellShortfall(r) {
+  const acts = r.actions || [];
+  if (!acts.some((a) => a.type === "spell")) return null;
+  const costs = (r.costs && r.costs.spell) || {};
+  let mana = (r.enter && r.enter.mana != null) ? r.enter.mana : (r.mana || 0);
+  for (const a of acts) {
+    if (a.type !== "spell") continue;
+    const cost = costs[a.spell] || 0;
+    if (mana < cost) return `${(a.spell || "").replace(/_/g, " ")} won't cast — needs ${int(cost)} mana, have ${int(mana)}`;
+    mana -= cost;
+  }
+  return null;
+}
 // First spendable resource / barren land type the row drives negative, as a short label.
 function rowOverspend(r) {
   for (const [name, v] of [["platinum", r.platinum], ["lumber", r.lumber], ["ore", r.ore], ["draftees", r.draftees]]) {
-    if ((v ?? 0) < 0) return `${name} −${int(-v)}`;
+    if ((v ?? 0) < 0) return `overspent ${name} by ${int(-v)}`;
   }
   const free = r.freeLandByType || {};
-  for (const lt of LAND_TYPES) if ((free[lt] ?? 0) < 0) return `${lt} land −${int(-free[lt])}`;
+  for (const lt of LAND_TYPES) if ((free[lt] ?? 0) < 0) return `overspent ${lt} land by ${int(-free[lt])}`;
   return null;
 }

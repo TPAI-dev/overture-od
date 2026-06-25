@@ -1,6 +1,6 @@
 [package]
 name = "overture"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 description = "OVERTURE — OpenDominion protection-period build studio"
 authors = ["lethal5808"]

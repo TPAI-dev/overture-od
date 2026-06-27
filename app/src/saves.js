@@ -36,6 +36,7 @@ export function createSaves(deps) {
   const fileInput = document.getElementById("buildsImport");
   let note = "";
   let savedBuilds = [];         // normalized SAVED list — filesystem (desktop) or localStorage (browser)
+  let visibleBuilds = [];       // savedBuilds filtered to the current race (what the list shows + load/delete index into)
 
   // Populate `savedBuilds` from the filesystem (desktop) or localStorage (browser). FS entries are
   // normalized to the same shape, tagged `_fs` so load/delete route to the backend.
@@ -49,6 +50,9 @@ export function createSaves(deps) {
 
   async function render() {
     const plan = deps.getPlan();
+    // Saved builds are scoped to the selected race: a lyc session shows lyc saves, never human ones.
+    // Untagged legacy saves (race "") are universal so they never silently vanish.
+    visibleBuilds = savedBuilds.filter((b) => !b.race || b.race === plan.race);
     pop.innerHTML = `
       <div class="bl-head"><span>BUILD LIBRARY</span><button class="bl-x" id="blX" aria-label="close">✕</button></div>
       <div class="bl-save">
@@ -56,12 +60,12 @@ export function createSaves(deps) {
         <button id="blSave">save</button>
       </div>
       ${note ? `<div class="bl-note">${esc(note)}</div>` : ""}
-      <div class="bl-section">SAVED BUILDS</div>
-      <div class="bl-list">${savedBuilds.length ? savedBuilds.map((b, i) => `
+      <div class="bl-section">SAVED BUILDS · ${esc(plan.race)}</div>
+      <div class="bl-list">${visibleBuilds.length ? visibleBuilds.map((b, i) => `
         <div class="bl-item">
           <div class="bl-meta"><b>${esc(b.name)}</b><span>${esc(b.race || "")}${b.stats ? ` · ${int(b.stats.committed)} land · ${b.stats.feasible ? "✓ " : ""}${int(b.stats.dp)} DP` : (b.dpTarget ? ` · ${int(b.dpTarget)} DP target` : "")} · ${fmtDate(b.savedAt)}</span></div>
           <div class="bl-act"><button data-load="${i}">load</button><button class="bl-del" data-del="${i}" title="delete">✕</button></div>
-        </div>`).join("") : '<div class="bl-empty">no saved builds yet — name one above and hit save</div>'}
+        </div>`).join("") : `<div class="bl-empty">no saved ${esc(plan.race)} builds yet — name one above and hit save</div>`}
       </div>
       <div class="bl-foot"><button id="blExport">⇩ export current</button><button id="blImport">⇧ import file</button></div>`;
     pop.querySelector("#blX").onclick = close;
@@ -101,7 +105,7 @@ export function createSaves(deps) {
   }
 
   async function doLoad(i) {
-    const b = savedBuilds[i];
+    const b = visibleBuilds[i];
     if (!b) return;
     let plan = b.plan;
     if (b._fs && deps.loadBuild) { try { plan = await deps.loadBuild(b.name); } catch (_) { plan = null; } }
@@ -109,7 +113,7 @@ export function createSaves(deps) {
     else { note = "could not load — file is not a valid OVERTURE build"; render(); }
   }
   async function doDelete(i) {
-    const b = savedBuilds[i];
+    const b = visibleBuilds[i];
     if (!b) return;
     if (b._fs) { if (deps.deleteSave) { try { await deps.deleteSave(b.name); } catch (_) {} } }
     else { write(read().filter((x) => x.id !== b.id)); }

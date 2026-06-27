@@ -96,10 +96,17 @@ export function createEditor(deps) {
   // Max legal count for a lane at hour h: the hour's wallet with this lane's CURRENT spend added back
   // (so the figure is the cell's total capacity, correct even when it's currently overspent), fed to
   // the same maxDetailed() the old per-action "max legal" button used. Returns { n, why }.
+  //
+  // The added-back spend MUST be sourced from the same trace row as the wallet (rows[h].actions), NOT
+  // the live plan (laneRead): the wallet's draftees/platinum reflect the LAST recompute, but the live
+  // plan updates synchronously on write(). A max-click fired during an in-flight async recompute (e.g.
+  // a quick double-click) would otherwise add a not-yet-applied spend back onto a stale wallet and
+  // DOUBLE the figure — filling more than is possible (656 → 1312).
+  const laneSpentInRow = (row, match) => ((row && row.actions) || []).filter(match).reduce((s, a) => s + (a.n | 0), 0);
   function maxLaneAt(h, type, key) {
     const row = rowAt(h);
     if (!row || !row.costs) return { n: 0, why: "" };
-    const w = freshWallet(row), c = row.costs, cur = laneRead(h, matchOf(type, key));
+    const w = freshWallet(row), c = row.costs, cur = laneSpentInRow(row, matchOf(type, key));
     if (type === "construct") {
       const lt = buildingLand(key);
       w.platinum += cur * c.constructPlat; w.lumber += cur * c.constructLumber; w.free[lt] = (w.free[lt] || 0) + cur;

@@ -179,19 +179,9 @@ const lastRow = () => (trace && trace.rows && trace.rows.length ? trace.rows.len
 // Editable hours = 1..plan.hours.length (the trailing end row is display-only).
 const planHours = () => (plan.hours ? plan.hours.length : DEFAULT_HOURS);
 
-// Per-race resource visibility (improvement #2). ORE is the ONLY per-race resource — it has no
-// universal sink (it's purely a unit-training input), so a race whose units never cost ore has no use
-// for it and the column hides. Everything else is always shown: platinum/food, lumber (construction),
-// mana (spells), and GEMS — everyone builds diamond mines eventually, so gems stays on for every race.
-function buildUsesResource(key) {
-  if (!trace || !trace.rows) return false;
-  const prod = key === "ore" ? "orePerHr" : null;
-  return trace.rows.some((r) => (r[key] || 0) > 0 || (prod && (r[prod] || 0) > 0));
-}
-function showResource(key) {
-  if (key === "ore") return !!(meta && meta.resources && meta.resources.ore) || buildUsesResource("ore");
-  return true; // platinum, food, lumber, mana, gems — always shown
-}
+// Every resource has a universal modeled use. In particular, ore can fund
+// castle improvements even when this race has no ore-cost troops.
+function showResource() { return true; }
 
 const buildingLandOf = (b) => (meta && meta.buildingLand && meta.buildingLand[b]) || "plain";
 

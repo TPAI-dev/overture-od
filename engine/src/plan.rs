@@ -436,11 +436,14 @@ pub fn apply_action_at_round_day(s: &mut DominionState, a: &Value, round_day: i6
         }
         "improve" => {
             let resource = a["resource"].as_str().unwrap_or("");
+            if !is_investment_resource(resource) {
+                return;
+            }
             let worth = match resource {
                 "platinum" => 1,
                 "lumber" | "ore" => 2,
                 "gems" => 12,
-                _ => 0,
+                _ => return,
             };
             let have = match resource {
                 "platinum" => s.resource_platinum,
@@ -449,25 +452,36 @@ pub fn apply_action_at_round_day(s: &mut DominionState, a: &Value, round_day: i6
                 "gems" => s.resource_gems,
                 _ => 0,
             };
-            if worth > 0 {
-                if let Some(data) = a["data"].as_object() {
-                    let total: i64 = data.values().filter_map(|v| v.as_i64()).sum();
-                    if total > 0 && total <= have {
-                        for (typ, v) in data {
-                            let amount = v.as_i64().unwrap_or(0);
-                            let mult = calc::investment_multiplier(s, resource, typ);
-                            let points =
-                                crate::rounding::rfloor(amount as f64 * worth as f64 * mult);
-                            add_improvement(s, typ, points);
-                        }
-                        match resource {
-                            "platinum" => s.resource_platinum -= total,
-                            "lumber" => s.resource_lumber -= total,
-                            "ore" => s.resource_ore -= total,
-                            "gems" => s.resource_gems -= total,
-                            _ => {}
-                        }
-                    }
+            let Some(data) = a["data"].as_object() else {
+                return;
+            };
+            let mut investments = Vec::with_capacity(data.len());
+            let mut total = 0i64;
+            for (typ, value) in data {
+                let Some(amount) = value.as_i64() else {
+                    return;
+                };
+                if !is_known_improvement(typ) || amount < 0 {
+                    return;
+                }
+                let Some(next_total) = total.checked_add(amount) else {
+                    return;
+                };
+                total = next_total;
+                investments.push((typ, amount));
+            }
+            if total > 0 && total <= have {
+                for (typ, amount) in investments {
+                    let mult = calc::investment_multiplier(s, resource, typ);
+                    let points = crate::rounding::rfloor(amount as f64 * worth as f64 * mult);
+                    add_improvement(s, typ, points);
+                }
+                match resource {
+                    "platinum" => s.resource_platinum -= total,
+                    "lumber" => s.resource_lumber -= total,
+                    "ore" => s.resource_ore -= total,
+                    "gems" => s.resource_gems -= total,
+                    _ => {}
                 }
             }
         }
@@ -748,6 +762,22 @@ pub fn is_known_land(t: &str) -> bool {
     KNOWN_LAND.contains(&t.trim_start_matches("land_"))
 }
 
+/// Castle-improvement keys accepted by the live ImproveActionService.
+pub const KNOWN_IMPROVEMENTS: [&str; 6] =
+    ["science", "keep", "forges", "walls", "spires", "harbor"];
+
+/// Normal castle investments. Mana is deliberately excluded: investing mana is
+/// hero-gated in the game, while OVERTURE does not model heroes.
+pub const INVESTMENT_RESOURCES: [&str; 4] = ["platinum", "lumber", "ore", "gems"];
+
+pub fn is_known_improvement(improvement: &str) -> bool {
+    KNOWN_IMPROVEMENTS.contains(&improvement)
+}
+
+pub fn is_investment_resource(resource: &str) -> bool {
+    INVESTMENT_RESOURCES.contains(&resource)
+}
+
 /// Validate ONE OVERTURE shorthand action (the editor/import form, pre-reshape).
 /// Returns `Some(message)` for the first structural problem, or `None` if legal.
 /// `where_` is a human label for the location (e.g. "hour 5", "OOP") for the message.
@@ -808,6 +838,53 @@ fn overture_action_error(a: &Value, where_: &str) -> Option<String> {
                     if !is_known_land(l) {
                         return Some(format!("unknown land in rezone {key} at {where_}: \"{l}\""));
                     }
+                }
+            }
+        }
+        "improve" => {
+            let resource = a.get("resource").and_then(Value::as_str).unwrap_or("");
+            if !is_investment_resource(resource) {
+                return Some(format!(
+                    "invalid castle-investment resource at {where_}: \"{resource}\" (use platinum, lumber, ore, or gems)"
+                ));
+            }
+            let Some(data) = a.get("data").and_then(Value::as_object) else {
+                return Some(format!(
+                    "missing improvement allocation data in improve action at {where_}"
+                ));
+            };
+            let mut total = 0i64;
+            for (improvement, value) in data {
+                if !is_known_improvement(improvement) {
+                    return Some(format!(
+                        "unknown castle improvement at {where_}: \"{improvement}\""
+                    ));
+                }
+                let Some(amount) = value.as_i64() else {
+                    return Some(format!(
+                        "non-integer investment in {improvement} at {where_}: {value}"
+                    ));
+                };
+                if amount < 0 {
+                    return Some(format!(
+                        "negative investment in {improvement} at {where_}: {amount}"
+                    ));
+                }
+                let Some(next_total) = total.checked_add(amount) else {
+                    return Some(format!("castle investment is too large at {where_}"));
+                };
+                total = next_total;
+            }
+            if total <= 0 {
+                return Some(format!(
+                    "castle investment must allocate a positive amount at {where_}"
+                ));
+            }
+            if let Some(amount) = a.get("amount").and_then(Value::as_i64) {
+                if amount != total {
+                    return Some(format!(
+                        "castle investment total mismatch at {where_}: amount is {amount}, allocations total {total}"
+                    ));
                 }
             }
         }

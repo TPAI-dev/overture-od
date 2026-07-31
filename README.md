@@ -21,7 +21,7 @@ OVERTURE is the **simulator and planner**: you make the decisions, it tells you 
 - All **building types** and **land types**
 - **Explore**, **rezone**, **construct**, **train**, **daily bonuses**
 - Common **and racial economic self-spells**
-- **Improvements**, platinum↔ore **banking**, **draft rate**
+- Castle **improvements** through the dedicated Imps tab using platinum, lumber, ore, or gems; platinum↔ore **banking**; **draft rate**
 - **Tech research**, **late-start** bonuses, **starvation** casualties
 - The **leave-protection defense gate** and **defensive power** (raw + modded, incl. temple reduction)
 - Standalone **combat / range calculators** (`engine/src/combat.rs`), golden-tested

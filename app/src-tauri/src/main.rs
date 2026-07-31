@@ -339,6 +339,38 @@ fn employment_json(s: &DominionState) -> Value {
     })
 }
 
+/// Current castle-improvement state plus the exact race/tech investment
+/// multipliers for each normal resource. Heroes and wonders are outside
+/// OVERTURE's simulation scope, so mana is intentionally not offered here.
+fn improvements_json(s: &DominionState) -> Value {
+    let row = |key: &str, points: i64, bonus: f64, secondary: Option<f64>| {
+        json!({
+            "points": points,
+            "bonusPct": bonus * 100.0,
+            "secondaryBonusPct": secondary.map(|value| value * 100.0),
+            "multipliers": {
+                "platinum": calc::investment_multiplier(s, "platinum", key),
+                "lumber": calc::investment_multiplier(s, "lumber", key),
+                "ore": calc::investment_multiplier(s, "ore", key),
+                "gems": calc::investment_multiplier(s, "gems", key),
+            },
+        })
+    };
+    json!({
+        "science": row("science", s.improvement_science, calc::science_bonus(s), None),
+        "keep": row("keep", s.improvement_keep, calc::keep_bonus(s), None),
+        "forges": row("forges", s.improvement_forges, calc::forges_bonus(s), None),
+        "walls": row("walls", s.improvement_walls, calc::walls_bonus(s), None),
+        "spires": row("spires", s.improvement_spires, calc::spires_bonus(s), None),
+        "harbor": row(
+            "harbor",
+            s.improvement_harbor,
+            calc::harbor_bonus(s),
+            Some(calc::harbor_boat_bonus(s)),
+        ),
+    })
+}
+
 /// Map one engine state to the app's per-hour row (field names match `mock.js`,
 /// so the engine and the preview mock are interchangeable behind `bridge.js`).
 fn row_json(
@@ -417,6 +449,7 @@ fn row_json(
         "costs": costs_json(s, round_day),
         "caps": caps_json(s),
         "employment": employment_json(s),
+        "improvements": improvements_json(s),
         "buildings": buildings_json(s),
         "military": {
             "u1": s.military_unit1, "u2": s.military_unit2,
@@ -826,12 +859,10 @@ fn meta(race: String) -> Value {
             .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| a["key"].as_str().cmp(&b["key"].as_str()))
     });
-    // Which non-universal resource this race actually USES — drives per-race column visibility in the
-    // app. Only ORE is conditional: it has NO universal sink (it's purely a unit-training input), so a
-    // race whose units never cost ore has no use for it. platinum / food / lumber (construction) / mana
-    // (spells) / gems (diamond mines, which everyone builds) all stay on. Data-driven from unit costs.
+    // Every race can invest ore into castle improvements, even when none of its
+    // troops cost ore, so the app must keep that resource visible universally.
     let resources = json!({
-        "ore": engine::race_resources::race_has_training_resource(&race, "ore"),
+        "ore": true,
     });
     json!({
         "units": units, "techs": techs, "buildingLand": building_land,

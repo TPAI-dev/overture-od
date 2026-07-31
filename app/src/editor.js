@@ -35,14 +35,29 @@ const BANKABLE = ["platinum", "lumber", "ore", "gems"];
 // Bank exchange (BankingCalculator; bonus = 1 in protection): received = floor(amt·sell·buy).
 const BANK_SELL = { platinum: 0.5, lumber: 0.5, ore: 0.5, gems: 2.0, food: 0.0 };
 const BANK_BUY = { platinum: 1.0, lumber: 1.0, ore: 1.0, gems: 0.0, food: 0.5 };
-const IMPROVEMENTS = ["science", "keep", "walls", "spires", "forges", "harbor"];
+const IMPROVEMENT_RESOURCES = [
+  { key: "gems", color: "--c-gems", worth: 12 },
+  { key: "lumber", color: "--c-lumber", worth: 2 },
+  { key: "ore", color: "--c-ore", worth: 2 },
+  { key: "platinum", color: "--c-plat", worth: 1 },
+];
+const IMPROVEMENTS = [
+  { key: "science", label: "Science", effect: "platinum production" },
+  { key: "keep", label: "Keep", effect: "maximum population" },
+  { key: "forges", label: "Forges", effect: "offensive power" },
+  { key: "walls", label: "Walls", effect: "defensive power" },
+  { key: "spires", label: "Spires", effect: "wizard power and mana production" },
+  { key: "harbor", label: "Harbor", effect: "food and boat production" },
+];
 
 const TABS = [
   ["build", "Build"], ["rezone", "Rezone"], ["explore", "Explore"], ["train", "Train"],
-  ["events", "Events"], ["magic", "Magic"], ["bank", "Bank"], ["daily", "Daily"], ["manage", "Manage"], ["techs", "Techs"],
+  ["imps", "Imps"], ["events", "Events"], ["magic", "Magic"], ["bank", "Bank"], ["daily", "Daily"], ["manage", "Manage"], ["techs", "Techs"],
 ];
 
 const int = (n) => Math.round(n || 0).toLocaleString("en-US");
+const improveTotal = (a) => Object.values((a && a.data) || {}).reduce((sum, n) => sum + Math.max(0, Math.floor(+n || 0)), 0);
+const improveTargets = (a) => Object.entries((a && a.data) || {}).filter(([, n]) => (+n || 0) > 0).map(([key, n]) => `${key} ${int(n)}`).join(", ");
 const rceil = (n) => Math.ceil(Math.round(n * 1e10) / 1e10);
 export function constructionCost(costs, discountedLand, count, resource) {
   const n = Math.max(0, Math.trunc(count || 0));
@@ -75,6 +90,7 @@ export function createEditor(deps) {
   const root = document.getElementById("editor");
   let hour = 1, tab = "build", manageKind = "draft_rate", buildSel = "home", buildDir = "build", trainDir = "train";
   let exploreSel = "plain", trainSel = 1; // the lane currently picked in the Explore / Train windows
+  let improveResource = "gems";
   let eventKind = "invasion", editingEventId = null, previewSerial = 0;
 
   const plan = () => deps.getPlan();
@@ -249,8 +265,9 @@ export function createEditor(deps) {
         break;
       }
       case "improve": {
-        if ((a.amount | 0) > (w[a.resource] ?? 0)) r = `${a.resource} short by ${int((a.amount | 0) - (w[a.resource] ?? 0))}`;
-        if (!r && !dry) w[a.resource] -= a.amount | 0;
+        const amount = improveTotal(a);
+        if (amount > (w[a.resource] ?? 0)) r = `${a.resource} short by ${int(amount - (w[a.resource] ?? 0))}`;
+        if (!r && !dry) w[a.resource] -= amount;
         break;
       }
       case "research": {
@@ -374,7 +391,7 @@ export function createEditor(deps) {
       case "train": return { desc: `train ${typeof a.slot === "string" ? a.slot : "slot " + a.slot}`, edit: { key: "n", val: a.n }, kind: "k-build" };
       case "release": return { desc: `release ${a.unit === "draftees" ? "draftees" : "slot " + a.slot}`, edit: { key: "n", val: a.n }, kind: "k-demob" };
       case "bank": return { desc: `bank ${(a.source || "").replace("resource_", "")}→${(a.target || "").replace("resource_", "")}`, edit: { key: "amount", val: a.amount } };
-      case "improve": return { desc: `invest ${a.resource}→${Object.keys(a.data || {})[0] || ""}`, edit: { key: "amount", val: a.amount } };
+      case "improve": return { desc: `invest ${a.resource} → ${improveTargets(a) || "castle improvements"}`, edit: null };
       case "draft_rate": return { desc: "draft rate", edit: { key: "rate", val: a.rate, unit: "%" } };
       case "spell": return { desc: `cast ${bld(a.spell)}`, edit: null };
       case "research": { const t = (meta().techs || []).find((x) => x.key === a.tech); return { desc: `research ${t ? t.name : bld(a.tech)}`, edit: null }; }
@@ -405,16 +422,8 @@ export function createEditor(deps) {
     render();
   }
 
-  // Per-race resource visibility (mirrors app.js showResource): ORE is the only conditional one — it
-  // hides for races whose units never cost it (Merfolk etc.) unless the build actually holds ore. Hides
-  // ore from the budget strip + bank/improve pickers so a Merfolk player never sees an ore field. Everything
-  // else stays — platinum/lumber/mana (universal) and gems (everyone builds diamond mines).
-  function showRes(key) {
-    if (key !== "ore") return true;
-    const res = meta().resources || {};
-    const r = entryRow();
-    return !!res.ore || (r.ore || 0) > 0 || (r.orePerHr || 0) > 0;
-  }
+  // Ore is universal too: every race may invest it into castle improvements.
+  function showRes() { return true; }
   function budgetStrip(w) {
     const chip = ([k, v]) => `<span class="bud-chip ${w[k] < 0 ? "neg" : ""}" style="--c:var(${v})"><i></i><b>${int(w[k])}</b><span>${k}</span></span>`;
     return `<div class="ed-budget"><span class="ed-budget-cap">remaining this hour</span><div class="bud-row">${RES.filter(([k]) => showRes(k)).map(chip).join("")}</div></div>`;
@@ -760,6 +769,8 @@ export function createEditor(deps) {
         );
       }
       wireDirSwitch((d) => { trainDir = d; renderForm(w); });
+    } else if (tab === "imps") {
+      renderImprovements();
     } else if (tab === "magic") {
       renderMagic();
     } else if (tab === "bank") {
@@ -785,7 +796,7 @@ export function createEditor(deps) {
         <div class="ed-note">daily bonuses reset at hour 1 and hour 25</div>`;
       document.querySelectorAll(".ed-daily-btn").forEach((b) => (b.onclick = () => { if (!b.disabled) commit({ type: b.dataset.claim }); }));
     } else if (tab === "manage") {
-      const sub = `<div class="ed-grid1">${selField("mk", "action", [["draft_rate", "Set draft rate"], ["improve", "Invest (improvements)"], ["research", "Research tech"]].map(([k, l]) => `<option value="${k}" ${k === manageKind ? "selected" : ""}>${l}</option>`).join(""))}</div>`;
+      const sub = `<div class="ed-grid1">${selField("mk", "action", [["draft_rate", "Set draft rate"], ["research", "Research tech"]].map(([k, l]) => `<option value="${k}" ${k === manageKind ? "selected" : ""}>${l}</option>`).join(""))}</div>`;
       const host = el(`<div>${sub}<div id="manageBody"></div></div>`);
       document.getElementById("edForm").innerHTML = "";
       document.getElementById("edForm").appendChild(host);
@@ -875,6 +886,114 @@ export function createEditor(deps) {
       i.onchange = apply;
     });
     balance();
+  }
+
+  // ───────── Castle improvements ("Imps") — the live game accepts one resource
+  // and a multi-row allocation in a single instant action. The row contract carries
+  // exact race + researched-tech multipliers from Rust; mana is hero-gated and omitted. ─────────
+  function renderImprovements() {
+    const host = document.getElementById("edForm");
+    const row = entryRow();
+    const state = row.improvements || {};
+    const wallet = remainingWallet();
+    const resource = IMPROVEMENT_RESOURCES.find((item) => item.key === improveResource) || IMPROVEMENT_RESOURCES[0];
+    improveResource = resource.key;
+    const available = Math.floor(wallet[resource.key] || 0);
+    const spendable = Math.max(0, available);
+    const pct = (n) => {
+      const value = Number(n) || 0;
+      return `${value.toFixed(2).replace(/\.00$/, "").replace(/(\.\d)0$/, "$1")}%`;
+    };
+    const bonusText = (imp, info) => {
+      if (imp.key === "harbor") return `+${pct(info.bonusPct)} food · +${pct(info.secondaryBonusPct)} boats`;
+      return `+${pct(info.bonusPct)}`;
+    };
+    const resources = IMPROVEMENT_RESOURCES.map((item) => `
+      <button type="button" class="imp-resource ${item.key === resource.key ? "on" : ""}" data-resource="${item.key}" aria-pressed="${item.key === resource.key}">
+        <span>${item.key}</span><small>${item.worth} ${item.worth === 1 ? "point" : "points"} each · ${int(wallet[item.key] || 0)} available</small>
+      </button>`).join("");
+    const rows = IMPROVEMENTS.map((imp) => {
+      const info = state[imp.key] || {};
+      const multiplier = Number((info.multipliers || {})[resource.key]) || 1;
+      const rate = resource.worth * multiplier;
+      const rateLabel = Math.abs(rate - Math.round(rate)) < 0.0001 ? int(rate) : rate.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
+      return `<tr>
+        <td class="imp-name"><b>${imp.label}</b><span>${imp.effect}</span></td>
+        <td class="imp-current"><b>${int(info.points || 0)}</b><span>points</span></td>
+        <td class="imp-bonus">${bonusText(imp, info)}</td>
+        <td class="imp-entry"><input class="imp-input" type="number" min="0" step="1" inputmode="numeric" data-improvement="${imp.key}" value="" placeholder="0" aria-label="${resource.key} to invest in ${imp.label}"><button class="imp-max" type="button" data-max="${imp.key}">max</button></td>
+        <td class="imp-gain" data-gain="${imp.key}"><b>+0</b><span>points · ${rateLabel} per ${resource.key === "gems" ? "gem" : resource.key}</span></td>
+      </tr>`;
+    }).join("");
+    host.innerHTML = `
+      <div class="imp-head"><div><span class="imp-kicker">Castle improvements</span><h3>Invest resources across your castle</h3></div><div class="imp-wallet"><b>${int(available)}</b><span>${resource.key} available now</span></div></div>
+      <div class="imp-resources" role="group" aria-label="investment resource">${resources}</div>
+      <table class="imp-table">
+        <thead><tr><th>improvement</th><th>current</th><th>current bonus</th><th>invest ${resource.key}</th><th>points gained</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <div class="imp-summary"><span><b id="impTotal">0</b> ${resource.key} allocated</span><span><b id="impRemaining">${int(available)}</b> remaining</span></div>
+      <div class="ed-feedback" id="edFb"></div>
+      <button class="ed-add" id="edAdd" type="button">invest ${resource.key}</button>
+      <div class="ed-note">Instant. Gems are worth 12 points each; lumber and ore 2; platinum 1. Race perks and researched tech bonuses are included. Mana is unavailable because mana investment requires a hero perk, and OVERTURE does not model heroes. Wonders are also outside the simulation.</div>`;
+
+    const inputs = [...host.querySelectorAll(".imp-input")];
+    const read = () => Object.fromEntries(inputs.map((input) => [input.dataset.improvement, Math.max(0, Math.floor(+input.value || 0))]));
+    const action = () => {
+      const data = Object.fromEntries(Object.entries(read()).filter(([, amount]) => amount > 0));
+      const amount = Object.values(data).reduce((sum, n) => sum + n, 0);
+      return { type: "improve", resource: resource.key, data, amount };
+    };
+    const refresh = () => {
+      const allocation = read();
+      const total = Object.values(allocation).reduce((sum, n) => sum + n, 0);
+      let pointTotal = 0;
+      for (const imp of IMPROVEMENTS) {
+        const info = state[imp.key] || {};
+        const multiplier = Number((info.multipliers || {})[resource.key]) || 1;
+        const points = Math.floor(allocation[imp.key] * resource.worth * multiplier);
+        pointTotal += points;
+        const cell = host.querySelector(`[data-gain="${imp.key}"] b`);
+        if (cell) cell.textContent = `+${int(points)}`;
+      }
+      host.querySelector("#impTotal").textContent = int(total);
+      const remaining = available - total;
+      const remainingEl = host.querySelector("#impRemaining");
+      remainingEl.textContent = int(remaining);
+      remainingEl.closest("span").classList.toggle("neg", remaining < 0);
+      const add = host.querySelector("#edAdd"), fb = host.querySelector("#edFb");
+      if (total <= 0) {
+        add.disabled = true;
+        fb.innerHTML = `<span class="rz-dim">enter an amount beside one or more improvements</span>`;
+      } else if (total > spendable) {
+        add.disabled = true;
+        fb.innerHTML = `<span class="fb-bad">✕ ${resource.key} short by ${int(total - spendable)}</span>`;
+      } else {
+        add.disabled = false;
+        fb.innerHTML = `<span class="fb-ok">✓ ${int(total)} ${resource.key} → ${int(pointTotal)} improvement points · instant</span>`;
+      }
+    };
+    host.querySelectorAll(".imp-resource").forEach((button) => (button.onclick = () => {
+      improveResource = button.dataset.resource;
+      renderImprovements();
+    }));
+    inputs.forEach((input) => {
+      input.oninput = () => { if (+input.value < 0) input.value = "0"; refresh(); };
+      input.onchange = refresh;
+    });
+    host.querySelectorAll(".imp-max").forEach((button) => (button.onclick = () => {
+      const allocation = read();
+      const current = allocation[button.dataset.max] || 0;
+      const total = Object.values(allocation).reduce((sum, n) => sum + n, 0);
+      const input = host.querySelector(`.imp-input[data-improvement="${button.dataset.max}"]`);
+      if (input) input.value = String(Math.max(0, spendable - (total - current)));
+      refresh();
+    }));
+    host.querySelector("#edAdd").onclick = () => {
+      const a = action();
+      if (a.amount > 0 && !applyOne(remainingWallet(), a, true)) commit(a);
+    };
+    refresh();
   }
 
   // ───────── Magic — one card per self-spell, no dropdown. "keep up" maintains the spell from this
@@ -1184,11 +1303,6 @@ export function createEditor(deps) {
     if (manageKind === "draft_rate") {
       body.innerHTML = `<div class="ed-grid1">${numField("p1", "draft rate %", r.draftRate || 90)}</div><div class="ed-note">draftees grow 1%/hr of peasants while military %% &lt; draft rate</div><div class="ed-feedback" id="edFb"></div><button class="ed-add" id="edAdd">set draft rate</button>`;
       wireManageAdd(() => ({ type: "draft_rate", rate: Math.max(0, Math.min(100, vn("p1"))) }));
-    } else if (manageKind === "improve") {
-      const so = BANKABLE.filter(showRes).map((s) => `<option value="${s}">${s}</option>`).join("");
-      const io = IMPROVEMENTS.map((s) => `<option>${s}</option>`).join("");
-      body.innerHTML = `<div class="ed-grid3">${selField("p1", "spend", so)}${selField("p2", "into", io)}${numField("p3", "amount", 5000)}</div><div class="ed-note">invests resources into a realm improvement</div>${MAX_ROW}<div class="ed-feedback" id="edFb"></div><button class="ed-add" id="edAdd">invest</button>`;
-      wireManageAdd(() => ({ type: "improve", resource: v("p1"), data: oneObj(v("p2"), vn("p3")), amount: vn("p3") }), "p3");
     } else if (manageKind === "research") {
       const techs = (meta().techs || []).filter((t) => !(r.techs || []).includes(t.key));
       body.innerHTML = techs.length
@@ -1197,8 +1311,6 @@ export function createEditor(deps) {
       if (techs.length) wireManageAdd(() => ({ type: "research", tech: v("p1") }));
     }
   }
-  function oneObj(k, val) { const o = {}; o[k] = val; return o; }
-  const MAX_ROW = `<div class="ed-maxrow">max legal <button class="ed-maxbtn" id="edMax" type="button">—</button><span class="ed-maxwhy" id="edMaxWhy"></span></div>`;
   function wireManageAdd(collect, qtyField, noteFn) {
     const fb = document.getElementById("edFb"), add = document.getElementById("edAdd");
     if (!add) return;
@@ -1232,7 +1344,7 @@ export function actLabel(a, meta) {
   if (a.type === "destroy") return `destroy <b>${int(a.n)}</b> ${a.building.replace(/_/g, " ")}`;
   if (a.type === "release") return `release <b>${int(a.n)}</b> ${a.unit === "draftees" ? "draftees" : "slot " + a.slot}`;
   if (a.type === "draft_rate") return `draft rate → <b>${a.rate}%</b>`;
-  if (a.type === "improve") return `invest <b>${int(a.amount)}</b> ${a.resource} → ${Object.keys(a.data || {})[0] || ""}`;
+  if (a.type === "improve") return `invest <b>${int(improveTotal(a))}</b> ${a.resource} → ${improveTargets(a) || "castle improvements"}`;
   if (a.type === "research") {
     const t = meta && (meta.techs || []).find((x) => x.key === a.tech);
     return `research <b>${t ? t.name : (a.tech || "").replace(/_/g, " ")}</b>`;
@@ -1274,7 +1386,7 @@ export function platinumFlow(trace) {
         case "construct": break;
         case "rezone": f.sinks.rezone += n * c.rezonePlat; break;
         case "train": { const t = c.train[a.slot] || {}; f.sinks.train += n * (t.platinum || 0); break; }
-        case "improve": if (a.resource === "platinum") f.sinks.improve += a.amount | 0; break;
+        case "improve": if (a.resource === "platinum") f.sinks.improve += improveTotal(a); break;
         case "bank": {
           const src = (a.source || "").replace("resource_", ""), tgt = (a.target || "").replace("resource_", ""), amt = a.amount | 0;
           if (src === "platinum") f.bankOut += amt;

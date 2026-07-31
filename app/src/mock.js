@@ -39,6 +39,8 @@ const UNIT = {
   4: { off: 6, def: 3, plat: 1280, ore: 100, h: 12, ret: 9, name: "Cavalry", kind: "elite" },
 };
 const SPELL_MANA = { midas_touch: 2.5, harmony: 2.5, ares_call: 2.5, gaias_watch: 2.0, mining_strength: 2.0 };
+const IMPROVEMENT_KEYS = ["science", "keep", "forges", "walls", "spires", "harbor"];
+const INVESTMENT_WORTH = { platinum: 1, lumber: 2, ore: 2, gems: 12 };
 const r = (x) => Math.round(x);
 const rceil = (x) => Math.ceil(x - 1e-9);
 
@@ -57,15 +59,9 @@ export function invasionLandGain(attackerLand, targetLand) {
   return { attackerLand: attacker, targetLand: target, rangePct: ratio * 100, conquered, generated: conquered, gained: conquered * 2 };
 }
 
-// Live races whose units cost NO ore (so the ore column/inputs hide). PREVIEW-ONLY mirror of
-// the engine's data-driven `race_has_training_resource` (the real backend computes it from unit costs),
-// kept so the browser preview hides ore per race exactly like the desktop app. Only ORE is per-race;
-// platinum/food/lumber/mana/gems all stay on for everyone (gems = diamond mines, which everyone builds).
-const NO_ORE = new Set(["demon", "firewalker", "lizardfolk", "merfolk", "orc", "spirit-rework", "sylvan", "undead-rework", "vampire", "wood-elf-rework"]);
-
 // Static reference the editor uses for labels (Human stats; the real backend's `meta` command is
-// data-driven for every race). The `resources` flag IS race-aware (see NO_ORE/GEMS_RACES) so the
-// preview's per-race resource hiding matches the desktop app.
+// data-driven for every race). Ore stays visible for every race because it can
+// always be invested into castle improvements.
 export function meta(race) {
   const buildingLand = { ...BUILDING_LAND };
   delete buildingLand.forest_haven; // dead source entry, not buildable
@@ -73,7 +69,7 @@ export function meta(race) {
     units: [1, 2, 3, 4].map((s) => ({ slot: s, name: UNIT[s].name, defense: UNIT[s].def, offense: UNIT[s].off, plat: UNIT[s].plat, ore: UNIT[s].ore, kind: UNIT[s].kind, returnHours: UNIT[s].ret, needBoat: true, trainable: true })),
     techs: TECHS,
     buildingLand,
-    resources: { ore: !NO_ORE.has(race) },
+    resources: { ore: true },
     boatCapacity: 30,
     homeLand: "plain", // Human preview; the real backend's meta is data-driven per race
     ruleset: { ...RULESET, productionOverrides: { ...RULESET.productionOverrides } },
@@ -107,6 +103,7 @@ export function simulate(plan) {
   let plat = 120000, food = 15000, lumber = 15000, ore = 0, mana = 0, gems = 0, tech = 0, boats = 0;
   let morale = 100, prestige = 250, draftRate = 90, discountedLand = 0;
   const techs = [];
+  const improvements = Object.fromEntries(IMPROVEMENT_KEYS.map((key) => [key, 0]));
   const baseBoatCapacity = meta(plan.race).boatCapacity;
   const boatCapacity = () => baseBoatCapacity + techs.reduce(
     (total, key) => total + (TECH_BY_KEY.get(key)?.perks?.boat_capacity || 0),
@@ -119,22 +116,35 @@ export function simulate(plan) {
   let dailyPlat = false, dailyLand = false;
 
   const totalLand = () => LAND_TYPES.reduce((a, t) => a + land[t], 0);
+  const round4 = (value) => Math.round(value * 10000) / 10000;
+  const improvementEfficiency = () => 1 + (b.masonry * 2.75) / Math.max(1, totalLand());
+  const improvementBonus = (key, max, coeff) => improvements[key] <= 0 ? 0 : round4(max * (1 - Math.exp(-improvements[key] / (coeff * totalLand() + 15000))) * improvementEfficiency());
+  const scienceBonus = () => improvementBonus("science", 0.20, 4000);
+  const keepBonus = () => improvementBonus("keep", 0.25, 4000);
+  const forgesBonus = () => improvementBonus("forges", 0.30, 7500);
+  const wallsBonus = () => improvementBonus("walls", 0.30, 7500);
+  const spiresBonus = () => improvementBonus("spires", 0.60, 5000);
+  const harborBonus = () => improvementBonus("harbor", 0.60, 5000);
+  const harborBoatBonus = () => improvements.harbor <= 0 ? 0 : round4(Math.min(0.50, 0.60 * (1 - Math.exp(-improvements.harbor / (5000 * totalLand() + 15000))) * 1.5));
+  const investmentMultiplier = (resource, improvement) => 1
+    + (plan.race === "goblin" && resource === "gems" ? 0.10 : 0)
+    + techs.reduce((sum, key) => sum + ((TECH_BY_KEY.get(key)?.perks?.[`invest_bonus_${improvement}`] || 0) / 100), 0);
   const totalB = () => Object.values(b).reduce((a, c) => a + c, 0);
   const builtOn = (lt) => Object.entries(b).filter(([k]) => BUILDING_LAND[k] === lt).reduce((a, [, n]) => a + n, 0);
   const constructingTotal = () => queue.filter((q) => q.kind === "build").reduce((a, q) => a + q.n, 0);
   const constructingOn = (lt) => queue.filter((q) => q.kind === "build" && BUILDING_LAND[q.building] === lt).reduce((a, q) => a + q.n, 0);
   const barren = () => totalLand() - totalB() - constructingTotal();
   const jobs = () => (totalB() - b.home - b.barracks) * 20;
-  const maxPop = () => r((b.home * HOUSING.home + (totalB() - b.home) * HOUSING.nonHome + constructingTotal() * HOUSING.constructing + barren() * HOUSING.barren) * (1 + 250 / 10000));
+  const maxPop = () => r((b.home * HOUSING.home + (totalB() - b.home) * HOUSING.nonHome + constructingTotal() * HOUSING.constructing + barren() * HOUSING.barren) * (1 + prestige / 10000 + keepBonus()));
   const employed = () => Math.min(jobs(), peasants);
   const smithyMult = () => 1 - Math.min((b.smithy / Math.max(1, totalLand())) * 2, 0.36);
   const gtBonus = () => Math.min(1.6 * b.guard_tower / Math.max(1, totalLand()), 0.32);
   const moraleMult = () => Math.min(1, Math.max(0.9, 0.9 + morale / 1000));
-  const mult = () => (1 + gtBonus() + (spells.ares_call > 0 ? 0.1 : 0)) * moraleMult();
+  const mult = () => (1 + gtBonus() + wallsBonus() + (spells.ares_call > 0 ? 0.1 : 0)) * moraleMult();
   const trainedRaw = () => mil.u1 * UNIT[1].def + mil.u2 * UNIT[2].def + mil.u3 * UNIT[3].def + mil.u4 * UNIT[4].def;
   const gryphonBonus = () => Math.min(1.6 * b.gryphon_nest / Math.max(1, totalLand()), 0.32);
-  // preview OP multiplier: gryphon nests × morale (forges/prestige/racial offense omitted in the mock)
-  const opMult = () => (1 + gryphonBonus()) * moraleMult();
+  // preview OP multiplier: gryphon nests + Forges × morale (other race/prestige channels omitted).
+  const opMult = () => (1 + gryphonBonus() + forgesBonus()) * moraleMult();
   const trainedOpRaw = () => mil.u1 * UNIT[1].off + mil.u2 * UNIT[2].off + mil.u3 * UNIT[3].off + mil.u4 * UNIT[4].off;
   const exploreDraftee = () => Math.floor(totalLand() / 150) + 3;
   const explorePlat = () => r(0.6 * Math.pow(totalLand(), 1.299) + (totalLand() < 1520 ? -0.001 * totalLand() ** 2 + 1.91 * totalLand() - 593 : 0));
@@ -210,10 +220,22 @@ export function simulate(plan) {
       jobsPerBuilding: 20, housingPerHome: 30, housingPerNonhome: 15, barracksMilitaryHousing: 36,
     };
   }
+  function improvementsOf() {
+    const bonusFor = (key) => ({
+      science: scienceBonus, keep: keepBonus, forges: forgesBonus,
+      walls: wallsBonus, spires: spiresBonus, harbor: harborBonus,
+    })[key]();
+    return Object.fromEntries(IMPROVEMENT_KEYS.map((key) => [key, {
+      points: improvements[key],
+      bonusPct: bonusFor(key) * 100,
+      secondaryBonusPct: key === "harbor" ? harborBoatBonus() * 100 : null,
+      multipliers: Object.fromEntries(Object.keys(INVESTMENT_WORTH).map((resource) => [resource, investmentMultiplier(resource, key)])),
+    }]));
+  }
 
   function snapshot(hour) {
-    const platHr = (r(b.alchemy * 45 + employed() * 2.7) * (spells.midas_touch > 0 ? 1.1 : 1)) | 0;
-    const foodGross = r(b.farm * 80 * (1 + (spells.gaias_watch > 0 ? 0.1 : 0)));
+    const platHr = r((b.alchemy * 45 + employed() * 2.7) * (1 + scienceBonus() + (spells.midas_touch > 0 ? 0.1 : 0)));
+    const foodGross = r(b.farm * 80 * (1 + harborBonus() + (spells.gaias_watch > 0 ? 0.1 : 0)));
     const aw = away();
     const popMil = draftees + mil.u1 + mil.u2 + mil.u3 + mil.u4 + aw.total;
     const population = peasants + popMil;
@@ -224,8 +246,8 @@ export function simulate(plan) {
       land: totalLand(), landBy: { ...land }, incoming: incoming(), incomingByType: incomingByType(), barren: barren(), freeLandByType,
       peasants, draftees, population, populationMilitary: popMil, maxPop: maxPop(), employed: employed(), jobs: jobs(),
       platinum: plat, food, lumber, ore, mana, gems, tech, boats, boatCapacity: boatCapacity(),
-      platPerHr: r(platHr), foodNet, lumberPerHr: b.lumberyard * 50 + b.forest_haven * 25, manaPerHr: b.tower * 25 + b.wizard_guild * 5, orePerHr: b.ore_mine * 60 * (spells.mining_strength > 0 ? 1.1 : 1),
-      gemPerHr: b.diamond_mine * 15, techPerHr: techPerHr(), boatsPerHr: b.dock / 20,
+      platPerHr: r(platHr), foodNet, lumberPerHr: b.lumberyard * 50 + b.forest_haven * 25, manaPerHr: r((b.tower * 25 + b.wizard_guild * 5) * (1 + spiresBonus())), orePerHr: b.ore_mine * 60 * (spells.mining_strength > 0 ? 1.1 : 1),
+      gemPerHr: b.diamond_mine * 15, techPerHr: techPerHr(), boatsPerHr: b.dock / 20 * (1 + harborBoatBonus()),
       trainedRaw: trainedRaw(), trainedModded: trainedRaw() * mult(), mult: mult(),
       trainedOpRaw: trainedOpRaw(), trainedOpModded: trainedOpRaw() * opMult(), opMult: opMult(),
       unitOffense: [1, 2, 3, 4].map((slot) => UNIT[slot].off),
@@ -234,7 +256,7 @@ export function simulate(plan) {
       morale, prestige, draftRate, discountedLand,
       dailyPlatinum: dailyPlat, dailyLand: dailyLand, techs: [...techs],
       costs: costs(),
-      caps: capsOf(), employment: employmentOf(),
+      caps: capsOf(), employment: employmentOf(), improvements: improvementsOf(),
       buildings: { ...b }, military: { ...mil, draftees }, away: aw,
       unitNeedsBoat: [true, true, true, true],
       spells: Object.entries(spells).filter(([, d]) => d > 0).map(([k, d]) => ({ key: k, dur: d })),
@@ -327,9 +349,18 @@ export function simulate(plan) {
       } else if (a.type === "draft_rate") {
         draftRate = a.rate | 0;
       } else if (a.type === "improve") {
-        const amt = a.amount | 0, res = a.resource;
+        const res = a.resource, worth = INVESTMENT_WORTH[res];
+        if (!worth) throw new Error("castle investments accept platinum, lumber, ore, or gems");
+        const entries = Object.entries(a.data || {});
+        if (!entries.length || entries.some(([key, amount]) => !IMPROVEMENT_KEYS.includes(key) || !Number.isInteger(amount) || amount < 0)) {
+          throw new Error("castle investment contains an invalid improvement allocation");
+        }
+        const amt = entries.reduce((sum, [, amount]) => sum + amount, 0);
+        if (amt <= 0) throw new Error("castle investment must allocate a positive amount");
+        if (a.amount != null && (a.amount | 0) !== amt) throw new Error("castle investment total does not match its allocations");
         const pool = { platinum: plat, lumber, ore, gems };
         if ((pool[res] ?? 0) >= amt && amt > 0) {
+          for (const [key, amount] of entries) improvements[key] += Math.floor(amount * worth * investmentMultiplier(res, key));
           if (res === "platinum") plat -= amt; else if (res === "lumber") lumber -= amt; else if (res === "ore") ore -= amt; else if (res === "gems") gems -= amt;
         }
       } else if (a.type === "research") {
@@ -412,14 +443,14 @@ export function simulate(plan) {
     { const row = snapshot(h); row.enter = enter; rows.push(row); }
 
     // production
-    plat += (r(b.alchemy * 45 + employed() * 2.7) * (spells.midas_touch > 0 ? 1.1 : 1)) | 0;
+    plat += r((b.alchemy * 45 + employed() * 2.7) * (1 + scienceBonus() + (spells.midas_touch > 0 ? 0.1 : 0)));
     lumber += b.lumberyard * 50 + b.forest_haven * 25 - r(lumber * 0.01);
-    mana += b.tower * 25 + b.wizard_guild * 5 - r(mana * 0.02);
+    mana += r((b.tower * 25 + b.wizard_guild * 5) * (1 + spiresBonus())) - r(mana * 0.02);
     ore += r(b.ore_mine * 60 * (spells.mining_strength > 0 ? 1.1 : 1));
     gems += b.diamond_mine * 15;
     tech += techPerHr();
-    boats += b.dock / 20;
-    food += r(b.farm * 80 * (1 + (spells.gaias_watch > 0 ? 0.1 : 0))) - r((peasants + draftees + mil.u1 + mil.u2 + mil.u3 + mil.u4 + away().total) * 0.25) - r(food * 0.01);
+    boats += b.dock / 20 * (1 + harborBoatBonus());
+    food += r(b.farm * 80 * (1 + harborBonus() + (spells.gaias_watch > 0 ? 0.1 : 0))) - r((peasants + draftees + mil.u1 + mil.u2 + mil.u3 + mil.u4 + away().total) * 0.25) - r(food * 0.01);
     food = Math.max(0, food);
 
     // growth (temples drive births; draft-rate gates draftee growth)

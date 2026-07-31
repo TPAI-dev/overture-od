@@ -746,6 +746,50 @@ body[data-reduced-motion="true"] .gate.latch { animation: none !important; }
 .rz-balance { min-height: 20px; margin-top: 12px; font-family: var(--font-mono); font-size: 12px; }
 .rz-dim { color: var(--text-faint); }
 
+/* ───────────────────────── Imps — castle investment ledger ───────────────────────── */
+.imp-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 18px; margin-bottom: 12px; }
+.imp-kicker { display: block; margin-bottom: 3px; color: var(--c-land); font-size: 9px; font-weight: 600; letter-spacing: .18em; text-transform: uppercase; }
+.imp-head h3 { margin: 0; color: var(--text); font-family: var(--font-display); font-size: 15px; font-weight: 650; letter-spacing: .01em; }
+.imp-wallet { display: flex; flex-direction: column; align-items: flex-end; font-family: var(--font-mono); white-space: nowrap; }
+.imp-wallet b { color: var(--text); font-size: 15px; }
+.imp-wallet span { color: var(--text-faint); font-size: 9px; text-transform: uppercase; letter-spacing: .08em; }
+.imp-resources { display: grid; grid-template-columns: repeat(4, minmax(112px, 1fr)); gap: 6px; margin-bottom: 12px; }
+.imp-resource { --imp: var(--c-land); display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 0; padding: 7px 9px; background: var(--panel-3); border: 1px solid var(--line-strong); border-left: 2px solid var(--imp); border-radius: 3px; color: var(--text-dim); cursor: pointer; font-family: var(--font-mono); text-align: left; text-transform: capitalize; }
+.imp-resource[data-resource="gems"] { --imp: var(--c-gems); }
+.imp-resource[data-resource="lumber"] { --imp: var(--c-lumber); }
+.imp-resource[data-resource="ore"] { --imp: var(--c-ore); }
+.imp-resource[data-resource="platinum"] { --imp: var(--c-plat); }
+.imp-resource span { color: var(--text); font-size: 11px; font-weight: 600; }
+.imp-resource small { overflow: hidden; max-width: 100%; color: var(--text-faint); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.imp-resource:hover { border-color: var(--imp); }
+.imp-resource.on { background: color-mix(in srgb, var(--imp) 13%, var(--panel-3)); border-color: var(--imp); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--imp) 28%, transparent); }
+.imp-table { width: 100%; min-width: 0; table-layout: fixed; border-collapse: separate; border-spacing: 0; }
+.imp-table th:nth-child(1) { width: 28%; }
+.imp-table th:nth-child(2) { width: 11%; }
+.imp-table th:nth-child(3) { width: 18%; }
+.imp-table th:nth-child(4) { width: 24%; }
+.imp-table th:nth-child(5) { width: 19%; }
+.imp-table th { padding: 6px 8px; border-bottom: 1px solid var(--line-strong); color: var(--text-faint); font-size: 9px; font-weight: 600; letter-spacing: .08em; text-align: right; text-transform: uppercase; }
+.imp-table th:first-child { text-align: left; }
+.imp-table td { padding: 7px 8px; border-bottom: 1px solid var(--line-soft); font-family: var(--font-mono); font-size: 11px; vertical-align: middle; }
+.imp-name { min-width: 0; }
+.imp-name b, .imp-name span, .imp-current b, .imp-current span, .imp-gain b, .imp-gain span { display: block; }
+.imp-name b { color: var(--text); font-family: var(--font-display); font-size: 12px; }
+.imp-name span, .imp-current span, .imp-gain span { margin-top: 2px; color: var(--text-faint); font-size: 9px; }
+.imp-current, .imp-bonus, .imp-gain { color: var(--text-dim); text-align: right; }
+.imp-current, .imp-gain { white-space: nowrap; }
+.imp-bonus { line-height: 1.35; }
+.imp-current b, .imp-gain b { color: var(--text); font-size: 12px; }
+.imp-bonus { color: var(--green); }
+.imp-entry { display: flex; align-items: stretch; justify-content: flex-end; gap: 4px; }
+.imp-input { width: 82px; min-width: 0; box-sizing: border-box; padding: 5px 7px; background: var(--panel-3); border: 1px solid var(--line-strong); border-left: 2px solid var(--c-land); border-radius: 3px; color: var(--text); font-family: var(--font-mono); font-size: 12px; outline: none; text-align: right; }
+.imp-input:focus-visible { border-color: var(--c-land); box-shadow: 0 0 0 2px rgba(207,138,99,.2); }
+.imp-max { padding: 0 7px; background: transparent; border: 1px solid var(--line); border-radius: 3px; color: var(--text-faint); cursor: pointer; font-family: var(--font-mono); font-size: 9px; }
+.imp-max:hover { border-color: var(--c-land); color: var(--c-land); }
+.imp-summary { display: flex; justify-content: flex-end; gap: 20px; margin-top: 10px; color: var(--text-faint); font-family: var(--font-mono); font-size: 10px; }
+.imp-summary b { color: var(--text); font-size: 12px; }
+.imp-summary .neg, .imp-summary .neg b { color: var(--red); }
+
 /* ───── ledger: L/P daily-bonus markers + a more legible day divider ───── */
 .k-claim { display: inline-block; margin-left: 4px; padding: 0 4px; border-radius: 3px; font-family: var(--font-mono); font-size: 9px; font-weight: 700; line-height: 14px; vertical-align: middle; }
 .k-claim-l { color: var(--c-land); background: rgba(207,138,99,.16); }

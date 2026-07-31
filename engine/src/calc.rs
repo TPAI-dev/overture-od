@@ -792,6 +792,16 @@ pub fn science_bonus(s: &DominionState) -> f64 {
 pub fn harbor_bonus(s: &DominionState) -> f64 {
     improvement_bonus(s, s.improvement_harbor, 0.60, 5000.0)
 }
+/// Harbor's secondary boat-production channel ignores Masonries, gains x1.5,
+/// and caps at 50% before the live four-decimal rounding.
+pub fn harbor_boat_bonus(s: &DominionState) -> f64 {
+    if s.improvement_harbor <= 0 {
+        return 0.0;
+    }
+    let land = total_land(s) as f64;
+    let base = 0.60 * (1.0 - (-(s.improvement_harbor as f64) / (5000.0 * land + 15000.0)).exp());
+    php_round((base * 1.5).min(0.50), 4)
+}
 /// Forges improvement (offensive power — unused by a protected explorer). max 30%, coeff 7500.
 pub fn forges_bonus(s: &DominionState) -> f64 {
     improvement_bonus(s, s.improvement_forges, 0.30, 7500.0)
@@ -868,7 +878,13 @@ pub fn mana_production(s: &DominionState) -> i64 {
     let raw = s.building_tower as f64 * MANA_PER_TOWER
         + s.building_wizard_guild as f64
             * (MANA_PER_WIZARD_GUILD + spell_perk(s, "wizard_guild_mana_production_raw"));
-    rfloor(raw * (1.0 + (race_perk(s, "mana_production") + tp(s, "mana_production")) / 100.0))
+    let multiplier = 1.0
+        + (race_perk(s, "mana_production")
+            + tp(s, "mana_production")
+            + spell_perk(s, "mana_production"))
+            / 100.0
+        + spires_bonus(s);
+    rfloor(raw * multiplier)
 }
 pub fn mana_decay(s: &DominionState) -> i64 {
     // getManaDecay uses round() (not rfloor)
@@ -911,7 +927,11 @@ pub fn tech_production(s: &DominionState) -> i64 {
 }
 
 pub fn boat_production(s: &DominionState) -> f64 {
-    s.building_dock as f64 / 20.0
+    let multiplier = 1.0
+        + tp(s, "boat_production") / 100.0
+        + spell_perk(s, "boat_production") / 100.0
+        + harbor_boat_bonus(s);
+    s.building_dock as f64 / 20.0 * multiplier
 }
 
 // ----------------------------------------------------------------------------

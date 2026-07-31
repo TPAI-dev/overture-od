@@ -208,8 +208,11 @@ function renderHour(acts, entry, ctx) {
     } else if (a.type === "draft_rate") {
       lines.push(`Draftrate changed to ${a.rate | 0}%.`);
     } else if (a.type === "improve") {
-      const imp = Object.keys(a.data || {})[0] || "";
-      if (imp && (a.amount | 0) > 0) lines.push(`You invested ${ig(a.amount)} ${a.resource} into ${imp}.`);
+      // The game logs one line per improvement even when the UI submits a
+      // multi-row allocation. Emitting every nonzero row preserves the action.
+      for (const [imp, amount] of Object.entries(a.data || {})) {
+        if ((amount | 0) > 0) lines.push(`You invested ${ig(amount)} ${a.resource} into ${imp}.`);
+      }
     }
     // a.type === "research": omitted — the protection importer has no research action.
   }

@@ -386,6 +386,7 @@ fn row_json(
         "mana": s.resource_mana,
         "gems": s.resource_gems,
         "boats": s.resource_boats,
+        "boatCapacity": calc::boat_capacity(s),
         "platPerHr": calc::platinum_production(s),
         "foodNet": calc::food_net_change(s),
         "lumberPerHr": calc::lumber_production(s),

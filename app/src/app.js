@@ -128,6 +128,7 @@ async function restoreFromHistory() {
   $("#dpInput").value = plan.dpTarget;
   $("#postOopInput").value = Math.max(0, plan.hours.length - PROTECTION_HOURS);
   if (metaRace !== plan.race) await loadMeta(plan.race);
+  else syncPlanRuleset();
   prev = null;
   await recompute();
   setPlayhead(Math.min(playhead, lastRow()));
@@ -137,13 +138,39 @@ async function restoreFromHistory() {
 async function loadMeta(race) {
   meta = await engine.meta(race);
   metaRace = race;
-  if (!plan.ruleset && meta.ruleset) plan.ruleset = clonePlan(meta.ruleset);
+  syncPlanRuleset();
   const badge = $("#rulesetBadge");
   if (badge && meta.ruleset) {
     badge.textContent = `R${meta.ruleset.round}`;
     const overrides = Object.values(meta.ruleset.productionOverrides || {});
     badge.title = `Ruleset ${meta.ruleset.id} · game source ${meta.ruleset.sourceTag} · ${meta.ruleset.sourceCommit}${overrides.length ? ` · live overrides: ${overrides.join("; ")}` : ""}`;
   }
+}
+
+function rulesetsMatch(a, b) {
+  if (!a || !b) return false;
+  const overrides = (value) => JSON.stringify(
+    Object.entries(value.productionOverrides || {}).sort(([left], [right]) => left.localeCompare(right))
+  );
+  return a.id === b.id
+    && a.round === b.round
+    && a.sourceTag === b.sourceTag
+    && a.sourceCommit === b.sourceCommit
+    && overrides(a) === overrides(b);
+}
+
+// A loaded build is always replayed by the currently bundled engine. Keep the old ruleset only as
+// provenance, then stamp the plan with the rules that actually produced the numbers now on screen.
+function syncPlanRuleset() {
+  if (!meta || !meta.ruleset) return;
+  const current = clonePlan(meta.ruleset);
+  if (plan.ruleset && !rulesetsMatch(plan.ruleset, current)) {
+    plan.migratedFromRuleset = clonePlan(plan.ruleset);
+    const oldRound = Number(plan.ruleset.round);
+    const from = Number.isFinite(oldRound) ? `Round ${oldRound}` : "an older ruleset";
+    toast(`⚠ <b>Ruleset updated.</b> This build was saved under ${from}; OVERTURE recalculated it with Round ${Number(current.round) || "current"} rules. The original ruleset was kept in the saved build for reference.`, "warn");
+  }
+  plan.ruleset = current;
 }
 
 // Highest ROW index in the current trace (data-driven: protection 0..48 + OOP 49 + post-OOP,

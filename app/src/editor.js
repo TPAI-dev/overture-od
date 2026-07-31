@@ -994,6 +994,7 @@ export function createEditor(deps) {
       returnHours: (row.unitReturnHours || [])[idx] ?? unit.returnHours,
     }));
     const military = row.military || {};
+    const boatCapacity = row.boatCapacity ?? meta().boatCapacity ?? 30;
     const needsBoat = (unit, idx) => {
       const live = Array.isArray(row.unitNeedsBoat) ? row.unitNeedsBoat[idx] : undefined;
       return typeof live === "boolean" ? live : unit.needBoat !== false;
@@ -1003,7 +1004,7 @@ export function createEditor(deps) {
     host.innerHTML = `${switcher}${editBar}
       <div class="event-hero"><span class="event-glyph">◆</span><div><b>Simulate invasion</b><p>Same-hour spells and techs feed the casualty calculation. Heroes and wonders are intentionally outside OVERTURE.</p></div></div>
       <div class="event-section">
-        <div class="event-section-head"><span>1 · target & army</span><span>${int(row.boats || 0)} boats · ${int(meta().boatCapacity || 30)} capacity</span></div>
+        <div class="event-section-head"><span>1 · target & army</span><span>${int(row.boats || 0)} boats · ${int(boatCapacity)} capacity</span></div>
         <div class="ed-grid2">
           ${numField("evTargetLand", "target land", targetLand, "--c-land")}
           ${numField("evTargetDp", "target DP", targetDp, "--c-dp")}
@@ -1090,7 +1091,7 @@ export function createEditor(deps) {
     syncOverride();
 
     host.querySelector("#eventFillArmy").onclick = () => {
-      let seats = Math.floor(row.boats || 0) * (meta().boatCapacity || 30);
+      let seats = Math.floor(row.boats || 0) * boatCapacity;
       const ranked = units.map((unit, idx) => ({ unit, idx })).sort((a, b) => (b.unit.offense || 0) - (a.unit.offense || 0));
       for (const { unit, idx } of ranked) {
         const available = military["u" + (idx + 1)] || 0;

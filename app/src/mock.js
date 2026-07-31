@@ -6,6 +6,7 @@
 // The real backend (src-tauri) calls the untouched engine crate instead.
 
 import { TECHS } from "./techdata.js"; // preview-only tech graph (real app gets it from the engine)
+const TECH_BY_KEY = new Map(TECHS.map((tech) => [tech.key, tech]));
 
 const HOUSING = { home: 30, nonHome: 15, constructing: 15, barren: 5 };
 // canonical building → land-type map (matches the engine's building_land map)
@@ -106,6 +107,11 @@ export function simulate(plan) {
   let plat = 120000, food = 15000, lumber = 15000, ore = 0, mana = 0, gems = 0, tech = 0, boats = 0;
   let morale = 100, prestige = 250, draftRate = 90, discountedLand = 0;
   const techs = [];
+  const baseBoatCapacity = meta(plan.race).boatCapacity;
+  const boatCapacity = () => baseBoatCapacity + techs.reduce(
+    (total, key) => total + (TECH_BY_KEY.get(key)?.perks?.boat_capacity || 0),
+    0
+  );
   const spells = {};            // key -> remaining hours
   const queue = [];             // {arrive, kind, ...}
   const rows = [];
@@ -217,7 +223,7 @@ export function simulate(plan) {
       hour, roundDay: roundDay(), rem: 48 - hour,
       land: totalLand(), landBy: { ...land }, incoming: incoming(), incomingByType: incomingByType(), barren: barren(), freeLandByType,
       peasants, draftees, population, populationMilitary: popMil, maxPop: maxPop(), employed: employed(), jobs: jobs(),
-      platinum: plat, food, lumber, ore, mana, gems, tech, boats,
+      platinum: plat, food, lumber, ore, mana, gems, tech, boats, boatCapacity: boatCapacity(),
       platPerHr: r(platHr), foodNet, lumberPerHr: b.lumberyard * 50 + b.forest_haven * 25, manaPerHr: b.tower * 25 + b.wizard_guild * 5, orePerHr: b.ore_mine * 60 * (spells.mining_strength > 0 ? 1.1 : 1),
       gemPerHr: b.diamond_mine * 15, techPerHr: techPerHr(), boatsPerHr: b.dock / 20,
       trainedRaw: trainedRaw(), trainedModded: trainedRaw() * mult(), mult: mult(),
@@ -351,7 +357,7 @@ export function simulate(plan) {
       const ratio = targetLand / Math.max(1, totalLand());
       if (ratio < 0.4 || ratio > 2.5) throw new Error("target is outside the legal invasion range");
       const boatUnits = sent.reduce((a, n) => a + n, 0);
-      if (boatUnits > Math.floor(boats) * 30) throw new Error("not enough boats to carry the requested invasion army");
+      if (boatUnits > Math.floor(boats) * boatCapacity()) throw new Error("not enough boats to carry the requested invasion army");
       if (morale < 80) throw new Error(`invasion requires at least 80 morale; the dominion has ${morale}`);
       const op = sent.reduce((sum, n, i) => sum + n * UNIT[i + 1].off, 0) * opMult();
       if (op <= targetDp) throw new Error(`invasion would fail: ${r(op)} OP does not beat ${r(targetDp)} target DP`);
@@ -396,7 +402,7 @@ export function simulate(plan) {
         prestigeReturnHour: (ev.prestige | 0) > 0 ? h + slowest : null,
         op, targetDp, rangePct: ratio * 100, moraleDelta,
         populationFreed: casualties.reduce((a, n) => a + n, 0),
-        manualOverride: Array.isArray(ev.casualtiesOverride), boatsSent: Math.floor(boatUnits / 30),
+        manualOverride: Array.isArray(ev.casualtiesOverride), boatsSent: Math.floor(boatUnits / boatCapacity()),
         appliedEffects: [],
       });
     }

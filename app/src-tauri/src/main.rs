@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{json, Map, Value};
 use tauri::Manager; // path resolver (app.path()) for the per-user storage dir
 
-use engine::rounding::{rceil, round_int};
+use engine::rounding::round_int;
 use engine::state::DominionState;
 use engine::{calc, combat, config, data, plan, scenario_event};
 
@@ -141,7 +141,7 @@ fn buildings_json(s: &DominionState) -> Value {
     Value::Object(m)
 }
 
-/// Land type a building must sit on (round-50 canonical map).
+/// Land type a building must sit on (current canonical map).
 fn building_land(b: &str) -> &'static str {
     match b {
         "tower" | "wizard_guild" | "temple" => "swamp",
@@ -237,22 +237,27 @@ fn free_land_by_type(s: &DominionState, off: &HashMap<String, i64>) -> Value {
 /// across a same-tick claim → rezone → build chain.
 fn costs_json(s: &DominionState, round_day: i64) -> Value {
     let land = s.total_land() as f64;
-    // Per-unit training cost, data-driven for every race (mirrors plan.rs::unit_train_cost
-    // + TrainingCalculator): every resource present in the race's unit data, scaled by the
-    // smithy/elite cost multiplier — EXCEPT gnome ore, which is never reduced. Only nonzero
-    // entries are emitted; keys are wallet resource names so the editor gates generically.
-    let train = |slot: usize| {
+    // Exact training inputs for race units and common ops units. Every key is a
+    // wallet/military pool, so the editor can gate Arcane Infusion's draftee
+    // Archmages and ordinary spy/wizard upgrades without recreating the rules.
+    let train = |unit: &str| {
         let mut t = Map::new();
-        for (res, amount) in calc::unit_training_costs(s, slot) {
-            t.insert(res.to_string(), json!(amount));
+        if let Some(costs) = calc::training_costs_for(s, unit) {
+            for (res, amount) in costs.resources {
+                t.insert(res.to_string(), json!(amount));
+            }
+            for (pool, amount) in [
+                ("draftees", costs.draftees),
+                ("spies", costs.spies),
+                ("wizards", costs.wizards),
+            ] {
+                if amount > 0 {
+                    t.insert(pool.to_string(), json!(amount));
+                }
+            }
         }
         Value::Object(t)
     };
-    // Spies & wizards: base 500 platinum × the spy/wizard cost multiplier + 1 draftee
-    // (TrainingCalculator). Both use the spy multiplier in the engine (parity); for
-    // perk-less races they coincide. Assassins/archmages aren't modeled by the engine
-    // (their spy/wizard pairing cost isn't ported), so they're intentionally omitted.
-    let spy_wizard = json!({ "platinum": rceil(500.0 * calc::spy_cost_multiplier(s)) });
     json!({
         "explorePlat": calc::explore_platinum_cost(s),
         "exploreDraftee": calc::explore_draftee_cost(s),
@@ -262,10 +267,23 @@ fn costs_json(s: &DominionState, round_day: i64) -> Value {
         "rezonePlat": calc::rezone_platinum_cost(s),
         "techCost": calc::tech_cost(s),
         "train": {
-            "1": train(1), "2": train(2), "3": train(3), "4": train(4),
-            "spies": spy_wizard, "wizards": spy_wizard,
+            "1": train("unit1"), "2": train("unit2"),
+            "3": train("unit3"), "4": train("unit4"),
+            "spies": train("spies"), "assassins": train("assassins"),
+            "wizards": train("wizards"), "archmages": train("archmages"),
         },
         "spell": spell_costs(&s.race, land, s.protection_finished),
+    })
+}
+
+fn ruleset_json() -> Value {
+    let ruleset = &data::get().ruleset;
+    json!({
+        "id": ruleset.id,
+        "round": ruleset.round,
+        "sourceTag": ruleset.source_tag,
+        "sourceCommit": ruleset.source_commit,
+        "productionOverrides": ruleset.production_overrides,
     })
 }
 
@@ -382,6 +400,9 @@ fn row_json(
         "trainedOpRaw": op_raw,
         "trainedOpModded": op_raw * op_mult,
         "opMult": op_mult,
+        "unitOffense": (1..=4).map(|slot| calc::unit_offense_modified(s, slot)).collect::<Vec<_>>(),
+        "unitNeedBoat": (1..=4).map(|slot| calc::unit_need_boat(s, slot)).collect::<Vec<_>>(),
+        "unitReturnHours": (1..=4).map(|slot| combat::unit_return_hours(s, slot)).collect::<Vec<_>>(),
         "morale": s.morale,
         "prestige": s.prestige,
         "discountedLand": s.discounted_land,
@@ -604,7 +625,11 @@ fn simulate(plan: Value) -> Result<Value, String> {
     final_obj.insert("dpTarget".into(), json!(dp_target));
     final_obj.insert("targetShort".into(), json!((dp_target - tmod).max(0.0)));
 
-    Ok(json!({ "rows": rows, "final": Value::Object(final_obj) }))
+    Ok(json!({
+        "ruleset": ruleset_json(),
+        "rows": rows,
+        "final": Value::Object(final_obj),
+    }))
 }
 
 /// Preview one draft event against the exact state at its hour without mutating
@@ -693,15 +718,14 @@ fn invasion_land_gain(attacker_land: i64, target_land: i64) -> Result<Value, Str
     }))
 }
 
-/// Race keys for the LIVE round-50 roster (21 races; Human first). Drives the
-/// race picker. = source-`playable` AND not admin-disabled in data/round50.json.
+/// Race keys for the current live roster (Human first).
 #[tauri::command]
 fn races() -> Vec<String> {
     // The previous filter here used a `!contains("rework") && !contains("legacy")`
     // string heuristic that was INVERTED for reworked races — it HID the live
     // `*-rework` races (e.g. undead-rework = Crypt Lords) and SHOWED the dead
-    // classics (undead = Progeny, playable:false). See engine::data::round50_live_keys.
-    let mut v = data::round50_live_keys();
+    // classics (undead = Progeny, playable:false). See engine::data::live_race_keys.
+    let mut v = data::live_race_keys();
     v.sort();
     v.sort_by_key(|k| (k != "human", k.clone())); // human pinned first
     v
@@ -746,8 +770,8 @@ fn meta(race: String) -> Value {
         .map(|(k, t)| json!({ "key": k, "name": t.name, "x": t.x, "y": t.y, "perks": t.perks, "requires": t.requires }))
         .collect();
     techs.sort_by(|a, b| a["key"].as_str().cmp(&b["key"].as_str()));
-    // Round-50 LIVE buildable set (BuildingHelper::getBuildingTypes). forest_haven is
-    // commented out in round-50 → dead code → excluded. The app offers only what the
+    // Current live buildable set (BuildingHelper::getBuildingTypes). forest_haven is
+    // commented out in the source → dead code → excluded. The app offers only what the
     // current round actually allows. (Keep this list in sync with the live ruleset.)
     let home = home_land_type(&race);
     let building_land: Map<String, Value> = [
@@ -812,6 +836,7 @@ fn meta(race: String) -> Value {
         "units": units, "techs": techs, "buildingLand": building_land,
         "homeLand": home, "spells": spells, "resources": resources,
         "boatCapacity": calc::boat_capacity(&return_state),
+        "ruleset": ruleset_json(),
     })
 }
 
@@ -869,14 +894,25 @@ fn now_millis() -> u64 {
 fn safe_stem(name: &str) -> String {
     let cleaned: String = name
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' || c == ' ' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' || c == ' ' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     let cleaned = cleaned.trim().trim_matches('.').trim().to_string();
-    if cleaned.is_empty() { "build".to_string() } else { cleaned }
+    if cleaned.is_empty() {
+        "build".to_string()
+    } else {
+        cleaned
+    }
 }
 
 fn save_payload(plan: &Value, stamp: u64) -> Value {
-    json!({ "overture": 1, "savedAt": stamp, "plan": plan })
+    let ruleset = plan.get("ruleset").cloned().unwrap_or_else(ruleset_json);
+    json!({ "overture": 1, "ruleset": ruleset, "savedAt": stamp, "plan": plan })
 }
 
 fn is_autosave_file(p: &Path) -> bool {
@@ -890,21 +926,30 @@ fn is_autosave_file(p: &Path) -> bool {
 fn write_named_save(dir: &Path, name: &str, plan: &Value, stamp: u64) -> std::io::Result<PathBuf> {
     std::fs::create_dir_all(dir)?;
     let path = dir.join(format!("{}.overture.json", safe_stem(name)));
-    std::fs::write(&path, serde_json::to_vec_pretty(&save_payload(plan, stamp)).unwrap_or_default())?;
+    std::fs::write(
+        &path,
+        serde_json::to_vec_pretty(&save_payload(plan, stamp)).unwrap_or_default(),
+    )?;
     Ok(path)
 }
 
 /// List every saved build in `dir` (newest first) with light metadata for the library UI.
 fn list_named_saves(dir: &Path) -> Vec<Value> {
     let mut out: Vec<(u64, Value)> = Vec::new();
-    let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) != Some("json") || is_autosave_file(&path) {
             continue;
         }
-        let Ok(text) = std::fs::read_to_string(&path) else { continue };
-        let Ok(v) = serde_json::from_str::<Value>(&text) else { continue };
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(v) = serde_json::from_str::<Value>(&text) else {
+            continue;
+        };
         let plan = v.get("plan").cloned().unwrap_or(Value::Null);
         let saved_at = v.get("savedAt").and_then(|s| s.as_u64()).unwrap_or(0);
         let name = path
@@ -932,9 +977,17 @@ fn list_named_saves(dir: &Path) -> Vec<Value> {
 fn write_autosave(dir: &Path, plan: &Value, stamp: u64, keep: usize) -> std::io::Result<PathBuf> {
     std::fs::create_dir_all(dir)?;
     let path = dir.join(format!("autosave-{stamp:013}.overture.json"));
-    std::fs::write(&path, serde_json::to_vec(&save_payload(plan, stamp)).unwrap_or_default())?;
+    std::fs::write(
+        &path,
+        serde_json::to_vec(&save_payload(plan, stamp)).unwrap_or_default(),
+    )?;
     let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
-        .map(|rd| rd.flatten().map(|e| e.path()).filter(|p| is_autosave_file(p)).collect())
+        .map(|rd| {
+            rd.flatten()
+                .map(|e| e.path())
+                .filter(|p| is_autosave_file(p))
+                .collect()
+        })
         .unwrap_or_default();
     files.sort(); // zero-padded stamp ⇒ lexicographic == chronological
     if files.len() > keep {
@@ -948,11 +1001,17 @@ fn write_autosave(dir: &Path, plan: &Value, stamp: u64, keep: usize) -> std::io:
 /// The most-recent autosave's payload ({overture, savedAt, plan}), or null if none.
 fn read_latest_autosave(dir: &Path) -> Value {
     let mut files: Vec<PathBuf> = match std::fs::read_dir(dir) {
-        Ok(rd) => rd.flatten().map(|e| e.path()).filter(|p| is_autosave_file(p)).collect(),
+        Ok(rd) => rd
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| is_autosave_file(p))
+            .collect(),
         Err(_) => return Value::Null,
     };
     files.sort();
-    let Some(latest) = files.last() else { return Value::Null };
+    let Some(latest) = files.last() else {
+        return Value::Null;
+    };
     std::fs::read_to_string(latest)
         .ok()
         .and_then(|t| serde_json::from_str::<Value>(&t).ok())
@@ -1030,7 +1089,7 @@ fn latest_autosave(app: tauri::AppHandle) -> Result<Value, String> {
 /// can read without invoking a command that isn't registered.
 #[tauri::command]
 fn capabilities() -> Value {
-    json!({ "swarm": false })
+    json!({ "swarm": false, "ruleset": ruleset_json() })
 }
 
 fn main() {
@@ -1102,7 +1161,10 @@ mod event_tests {
         assert_eq!(event["returnHours"][3], 9);
         assert_eq!(event["landReturnHour"], 61);
         assert!(event["populationFreed"].as_i64().unwrap() > 0);
-        assert_eq!(hit["military"]["u4"], 0, "sent troops leave home immediately");
+        assert_eq!(
+            hit["military"]["u4"], 0,
+            "sent troops leave home immediately"
+        );
         assert!(
             hit["away"]["u4"].as_i64().unwrap() > 0,
             "survivors remain in population while away"
@@ -1167,7 +1229,10 @@ mod save_tests {
         let p = write_named_save(&dir, "My Build! / r50", &plan, 1000).unwrap();
         assert!(p.exists());
         // path separators + punctuation collapse to underscores; stays a single file
-        assert_eq!(p.file_name().unwrap().to_str().unwrap(), "My Build_ _ r50.overture.json");
+        assert_eq!(
+            p.file_name().unwrap().to_str().unwrap(),
+            "My Build_ _ r50.overture.json"
+        );
         let saves = list_named_saves(&dir);
         assert_eq!(saves.len(), 1);
         assert_eq!(saves[0]["race"], "human");
@@ -1186,7 +1251,10 @@ mod save_tests {
         for stamp in 1..=20u64 {
             write_autosave(&dir, &plan, stamp, 5).unwrap();
         }
-        let count = std::fs::read_dir(&dir).unwrap().filter(|e| e.is_ok()).count();
+        let count = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter(|e| e.is_ok())
+            .count();
         assert_eq!(count, 5, "ring buffer should keep exactly the newest 5");
         let latest = read_latest_autosave(&dir);
         assert_eq!(latest["savedAt"], 20);
@@ -1215,9 +1283,19 @@ mod save_tests {
         // load_build/delete_save resolve `<root>/saves/{safe_stem(name)}.overture.json`, so the
         // ONLY thing standing between a caller-supplied name and an arbitrary file is safe_stem:
         // no separator or parent-dir token may survive — the stem is always one filename segment.
-        for hostile in ["../../etc/passwd", "..", "/etc/shadow", "a/b/c", "..\\..\\win", "...."] {
+        for hostile in [
+            "../../etc/passwd",
+            "..",
+            "/etc/shadow",
+            "a/b/c",
+            "..\\..\\win",
+            "....",
+        ] {
             let s = safe_stem(hostile);
-            assert!(!s.contains('/'), "{hostile:?} -> {s:?} leaked a forward slash");
+            assert!(
+                !s.contains('/'),
+                "{hostile:?} -> {s:?} leaked a forward slash"
+            );
             assert!(!s.contains('\\'), "{hostile:?} -> {s:?} leaked a backslash");
             assert_ne!(s, "..", "{hostile:?} produced a parent-dir token");
             assert!(!s.is_empty());

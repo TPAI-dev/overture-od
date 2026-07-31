@@ -11,7 +11,6 @@ use serde_json::Value;
 use crate::calc;
 use crate::config;
 use crate::data;
-use crate::rounding::rceil;
 use crate::scenario_event::{self, ScenarioEvent};
 use crate::state::{DominionState, QueueEntry};
 
@@ -391,24 +390,19 @@ pub fn apply_action_at_round_day(s: &mut DominionState, a: &Value, round_day: i6
                 for (k, v) in data {
                     let n = v.as_i64().unwrap_or(0);
                     let unit = k.strip_prefix("military_").unwrap_or(k);
-                    // not_trainable units (e.g. Planewalker's summoned slots) can't be trained.
-                    if let Some(slot) = unit
-                        .strip_prefix("unit")
-                        .and_then(|d| d.parse::<usize>().ok())
-                    {
-                        if !calc::unit_trainable(s, slot) {
-                            continue;
-                        }
-                    }
-                    let (costs, draftees, hours) = unit_train_cost(s, unit);
-                    for &(res, per) in &costs {
+                    let Some(costs) = calc::training_costs_for(s, unit) else {
+                        continue;
+                    };
+                    for &(res, per) in &costs.resources {
                         add_resource_bare(s, res, -per * n);
                     }
-                    s.military_draftees -= draftees * n;
+                    s.military_draftees -= costs.draftees * n;
+                    s.military_spies -= costs.spies * n;
+                    s.military_wizards -= costs.wizards * n;
                     s.queue.push(QueueEntry {
                         source: "training".into(),
                         resource: k.clone(),
-                        hours,
+                        hours: costs.hours,
                         amount: n,
                     });
                 }
@@ -535,6 +529,33 @@ pub fn apply_action_at_round_day(s: &mut DominionState, a: &Value, round_day: i6
                 }
             }
         }
+        // Oracle-parity fixture setup only: mirror the harness's force-filled
+        // dominion columns so focused golden vectors can skip unrelated buildup.
+        // OVERTURE's public plan validator never admits this action type.
+        "set_attrs" => {
+            if let Some(data) = a["data"].as_object() {
+                for (key, value) in data {
+                    let n = value.as_i64().unwrap_or(0);
+                    match key.as_str() {
+                        "peasants" => s.peasants = n,
+                        "military_draftees" => s.military_draftees = n,
+                        "military_unit1" => s.military_unit1 = n,
+                        "military_unit2" => s.military_unit2 = n,
+                        "military_unit3" => s.military_unit3 = n,
+                        "military_unit4" => s.military_unit4 = n,
+                        "resource_platinum" => s.resource_platinum = n,
+                        "resource_food" => s.resource_food = n,
+                        "resource_lumber" => s.resource_lumber = n,
+                        "resource_ore" => s.resource_ore = n,
+                        "resource_mana" => s.resource_mana = n,
+                        "resource_gems" => s.resource_gems = n,
+                        "resource_tech" => s.resource_tech = n,
+                        "prestige" => s.prestige = n,
+                        _ => {}
+                    }
+                }
+            }
+        }
         "claim_platinum" => {
             // One claim per day. The game (DailyBonusesActionService) blocks a second claim
             // until the daily flag resets on the 24h tick, and the log export re-gates the same
@@ -557,34 +578,6 @@ pub fn apply_action_at_round_day(s: &mut DominionState, a: &Value, round_day: i6
         other => {
             eprintln!("apply_action: unhandled {other}");
         }
-    }
-}
-
-/// Per-unit training cost for ANY race (data-driven). Returns (resource costs as
-/// (name, per-unit amount), draftees, queue_hours). Mirrors round-50
-/// TrainingCalculator::getTrainingCostsPerUnit + TrainActionService:
-///   • each resource present in the race's unit data (platinum/ore/mana/lumber/gems)
-///     is scaled by the specialist/elite cost multiplier (smithy reduction; the
-///     elite-only military_cost spell perk is 0 under protection, so proficiency
-///     doesn't matter here) — EXCEPT gnome ore, which is never reduced;
-///   • +1 draftee per unit;
-///   • train time is SLOT-based, not proficiency-based: slots 1–2 → 9h, 3–4 → 12h
-///     (TrainActionService hardcodes military_unit1/2 to the 9-hour bucket).
-/// For Human this is identical to the prior hard-coded human_unit_cost.
-fn unit_train_cost(s: &DominionState, unit: &str) -> (Vec<(&'static str, i64)>, i64, i64) {
-    if let Some(slot) = unit
-        .strip_prefix("unit")
-        .and_then(|d| d.parse::<usize>().ok())
-    {
-        let hours = if slot <= 2 { 9 } else { 12 };
-        return (calc::unit_training_costs(s, slot), 1, hours);
-    }
-    // spies / wizards: base 500 platinum × ops cost multiplier, +1 draftee, 12h.
-    // (Not exposed in the app's train tab, but kept for parity.)
-    let sp = calc::spy_cost_multiplier(s);
-    match unit {
-        "spies" | "wizards" => (vec![("platinum", rceil(500.0 * sp))], 1, 12),
-        _ => (vec![], 0, 12),
     }
 }
 
@@ -713,7 +706,7 @@ fn building_land(s: &DominionState, b: &str) -> String {
     .to_string()
 }
 
-/// The building types the engine models (round-50 roster). Keys may appear with or
+/// The building types the engine models (current roster). Keys may appear with or
 /// without a `building_` prefix in opening builds; both forms are accepted. Used to
 /// validate imported openings and to harden `apply_starting_buildings` against unknown
 /// keys — which would otherwise mint barren land with no building behind it.
@@ -777,11 +770,15 @@ fn overture_action_error(a: &Value, where_: &str) -> Option<String> {
                 }
                 Some(_) => {}
                 None => {
-                    return Some(format!("non-integer {field} in {t} action at {where_}: {num}"))
+                    return Some(format!(
+                        "non-integer {field} in {t} action at {where_}: {num}"
+                    ))
                 }
             },
             Some(other) => {
-                return Some(format!("non-numeric {field} in {t} action at {where_}: {other}"))
+                return Some(format!(
+                    "non-numeric {field} in {t} action at {where_}: {other}"
+                ))
             }
         }
     }
@@ -790,14 +787,18 @@ fn overture_action_error(a: &Value, where_: &str) -> Option<String> {
         "construct" | "destroy" => {
             if let Some(b) = a.get("building").and_then(Value::as_str) {
                 if !is_known_building(b) {
-                    return Some(format!("unknown building in {t} action at {where_}: \"{b}\""));
+                    return Some(format!(
+                        "unknown building in {t} action at {where_}: \"{b}\""
+                    ));
                 }
             }
         }
         "explore" => {
             if let Some(l) = a.get("land").and_then(Value::as_str) {
                 if !l.is_empty() && !is_known_land(l) {
-                    return Some(format!("unknown land in explore action at {where_}: \"{l}\""));
+                    return Some(format!(
+                        "unknown land in explore action at {where_}: \"{l}\""
+                    ));
                 }
             }
         }
@@ -805,9 +806,7 @@ fn overture_action_error(a: &Value, where_: &str) -> Option<String> {
             for key in ["from", "to"] {
                 if let Some(l) = a.get(key).and_then(Value::as_str) {
                     if !is_known_land(l) {
-                        return Some(format!(
-                            "unknown land in rezone {key} at {where_}: \"{l}\""
-                        ));
+                        return Some(format!("unknown land in rezone {key} at {where_}: \"{l}\""));
                     }
                 }
             }
@@ -871,7 +870,9 @@ pub fn opening_build_error(opening: &HashMap<String, i64>, start_land: i64) -> O
             return Some(format!("unknown building in opening build: \"{building}\""));
         }
         if *count < 0 {
-            return Some(format!("negative count for {building} in opening build: {count}"));
+            return Some(format!(
+                "negative count for {building} in opening build: {count}"
+            ));
         }
         total += *count;
     }

@@ -1,4 +1,4 @@
-// techdata.js — GENERATED from data/techs.json (round-50 tech tree, 66 nodes).
+// techdata.js — GENERATED from data/techs.json (pinned round-51 tech tree, 66 nodes).
 // PREVIEW-ONLY: the real desktop app gets this graph (with x/y/perks) from the bit-exact
 // engine via the `meta` Tauri command; this copy exists solely so the browser mock can render
 // the same tech-tree tab. Regenerate if data/techs.json changes (it only changes per round).

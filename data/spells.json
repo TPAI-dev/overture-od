@@ -322,6 +322,20 @@
         ],
         "perks": {
             "platinum_production": 15
+        },
+        "active": false
+    },
+    "arcane_infusion": {
+        "name": "Arcane Infusion",
+        "category": "self",
+        "cost_mana": 5,
+        "cost_strength": 5,
+        "duration": 12,
+        "races": [
+            "icekin"
+        ],
+        "perks": {
+            "train_archmages_from_draftees": 1400
         }
     },
     "mechanical_genius": {
@@ -463,7 +477,7 @@
             "troll"
         ],
         "perks": {
-            "casualties": -30
+            "casualties": -25
         }
     },
     "parasitic_hunger": {
@@ -581,6 +595,20 @@
             "mana_decay": 50
         },
         "active": false
+    },
+    "planar_focus": {
+        "name": "Planar Focus",
+        "category": "self",
+        "cost_mana": 5,
+        "cost_strength": 5,
+        "duration": 12,
+        "races": [
+            "planewalker"
+        ],
+        "perks": {
+            "disable_unit_summoning": 1,
+            "tech_production_raw_per_acre": 0.1
+        }
     },
     "necromantic_ritual": {
         "name": "Necromantic Ritual",
@@ -755,8 +783,8 @@
             "vampire"
         ],
         "perks": {
-            "cancels_immortal": 1,
-            "convert_vampires": 10
+            "conversion_rate": 25,
+            "apply_satiated_thirst": 1
         }
     },
     "martyrdom": {
@@ -779,9 +807,8 @@
             "demon"
         ],
         "perks": {
-            "offense_unit1": 0.5,
-            "flying_unit4": 1,
-            "apply_corruption": 1
+            "offense_unit1": -0.5,
+            "flying_unit4": 1
         }
     },
     "corruption": {
@@ -795,6 +822,20 @@
         ],
         "perks": {
             "platinum_production": -5
+        },
+        "active": false
+    },
+    "satiated_thirst": {
+        "name": "Satiated Thirst",
+        "category": "effect",
+        "cost_mana": 0,
+        "cost_strength": 0,
+        "duration": 48,
+        "races": [
+            "vampire"
+        ],
+        "perks": {
+            "offense": -10
         }
     }
 }

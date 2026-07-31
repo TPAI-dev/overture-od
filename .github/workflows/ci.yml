@@ -1,7 +1,7 @@
 # OVERTURE CI — correctness gate.
 #
 # Guarantees on every push/PR:
-#   * the engine BUILDS, and stays BIT-EXACT vs the round-50 golden vectors
+#   * the engine BUILDS, and stays BIT-EXACT vs the pinned golden vectors
 #     (engine/src/data.rs embeds data/ via include_dir!, so a clean checkout that
 #     passes the golden tests also proves the SHIPPED binary's data path works), and
 #   * the desktop app type-checks on both ship targets — macOS + Windows.

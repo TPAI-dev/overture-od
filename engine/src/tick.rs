@@ -1,4 +1,4 @@
-//! The per-tick transition, equivalent to round-50's precalculateTick + performTick.
+//! The per-tick transition, equivalent to the live game's precalculateTick + performTick.
 //!
 //! Single-pass model: resolve the queue entries arriving this tick (hours==1),
 //! compute growth/production on that post-arrival state, apply them, handle

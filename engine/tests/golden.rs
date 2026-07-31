@@ -306,8 +306,10 @@ fn dwarf_minerssight() {
 }
 
 #[test]
-fn icekin_frost() {
-    check("icekin_frost.json"); // Alchemist Frost → +15% platinum production
+fn icekin_arcane_infusion() {
+    // Current live Icekin racial spell: Archmages train from draftees using
+    // the production-configured platinum cost.
+    check("icekin_arcane_infusion.json");
 }
 
 #[test]

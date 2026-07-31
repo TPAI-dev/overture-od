@@ -1,4 +1,4 @@
-// techtree.js — the TECHS tab: an interactive replica of the round-50 research graph.
+// techtree.js — the TECHS tab: an interactive replica of the pinned research graph.
 //
 // Renders meta.techs (key, name, x, y, perks, requires) as an SVG node graph colored by the
 // per-hour state at the playhead (researched / available / locked), with a detail panel and
@@ -16,7 +16,7 @@ const int = (n) => Math.round(n || 0).toLocaleString("en-US");
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
 // Perks whose value is a FLAT amount (acres/hours/units), not a percent. Everything else in the
-// round-50 tech data is a percentage modifier. Display-only heuristic — it does not touch the
+// The pinned tech data uses percentage modifiers. Display-only heuristic — it does not touch the
 // engine math, which applies each perk's real semantics regardless of how we label it here.
 const FLAT_PERKS = new Set([
   "enemy_burning_duration", "boat_capacity", "boat_production", "barracks_housing",

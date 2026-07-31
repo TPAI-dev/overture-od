@@ -16,11 +16,11 @@
         {
             "name": "Infernal Imp",
             "cost": {
-                "platinum": 315,
+                "platinum": 360,
                 "mana": 20
             },
             "power": {
-                "offense": 3,
+                "offense": 3.5,
                 "defense": 0
             },
             "need_boat": false
@@ -32,7 +32,7 @@
                 "mana": 10
             },
             "power": {
-                "offense": 0,
+                "offense": 1,
                 "defense": 3
             }
         },
@@ -47,6 +47,7 @@
                 "defense": 5
             },
             "perks": {
+                "offense_from_land": "swamp,10,1",
                 "defense_from_land": "swamp,10,1",
                 "charm_spies": 1
             }
@@ -54,15 +55,12 @@
         {
             "name": "Archdemon",
             "cost": {
-                "platinum": 875,
-                "mana": 30
+                "platinum": 800,
+                "mana": 35
             },
             "power": {
                 "offense": 5,
                 "defense": 2
-            },
-            "perks": {
-                "casualties_offense": -20
             }
         }
     ]

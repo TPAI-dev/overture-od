@@ -24,13 +24,13 @@ OpenDominion — https://github.com/OpenDominion/OpenDominion — is licensed un
 the GNU Affero General Public License v3. OVERTURE derives from it in two ways,
 and inherits its license accordingly:
 
-  * The engine is a clean-room reimplementation of OpenDominion's round-50
+  * The engine is a clean-room reimplementation of OpenDominion's round-51
     game rules (production, population, combat, defense, and the per-tick
     economy). The Rust source documents the upstream PHP calculators it mirrors.
 
-  * The game data in `data/` (race, tech, spell, and round tables) is mirrored
-    bit-for-bit from OpenDominion's round-50 source so the simulation matches
-    the live game exactly.
+  * The game data in `data/` (race, tech, spell, and ruleset tables) starts from
+    OpenDominion tag 1.51.0. `data/ruleset.json` records the exact source commit
+    and the developer-confirmed live-production corrections applied afterward.
 
 All OpenDominion game content, names, and rules remain the property of the
 OpenDominion project and its contributors.

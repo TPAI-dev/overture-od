@@ -1,5 +1,5 @@
 //! Round-50 game constants and starting states. Every value is verified against
-//! ../OpenDominion-source @ round-50 (see docs/SPEC.md for citations).
+//! Pinned OpenDominion source rules (see data/ruleset.json and docs/SPEC.md).
 
 use crate::state::{DominionState, QueueEntry};
 

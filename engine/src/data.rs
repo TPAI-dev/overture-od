@@ -1,6 +1,5 @@
-//! Data-driven game content loaded from `data/` (exported from the round-50 game
-//! tables). Loaded once via OnceLock. Keeps techs/races/units
-//! out of hard-coded constants and enables all-race support.
+//! Data-driven game content loaded from the pinned game source. Ruleset
+//! provenance and the live roster travel with every compiled engine.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
@@ -9,11 +8,17 @@ use include_dir::{include_dir, Dir};
 use serde::Deserialize;
 use serde_json::Value;
 
+/// Stable identity for the game-data package compiled into this binary.
+pub const ENGINE_RULESET_ID: &str = "round51";
+pub const ENGINE_RULESET_ROUND: i64 = 51;
+pub const ENGINE_SOURCE_TAG: &str = "1.51.0";
+pub const ENGINE_SOURCE_COMMIT: &str = "35b977df6b47fd24636f920657b5c4edb46bbff7";
+
 #[derive(Deserialize, Default, Clone)]
 pub struct Tech {
     #[serde(default)]
     pub name: String,
-    /// Grid position in the round-50 tech-tree screen (mirrors the PHP `techs.x/y`).
+    /// Grid position in the current tech-tree screen (mirrors the PHP `techs.x/y`).
     /// Display-only — the engine math is position-agnostic — but surfaced so the app can
     /// render the spatial graph instead of a flat list. Was previously dropped at load.
     #[serde(default)]
@@ -34,13 +39,13 @@ pub struct UnitData {
     pub cost: HashMap<String, i64>,
     #[serde(default)]
     pub power: HashMap<String, f64>,
-    /// Round-50 unit perks (e.g. "defense_from_land": "forest,20,4.5",
+    /// Unit perks (e.g. "defense_from_land": "forest,20,4.5",
     /// "ore_production": 0.5, "not_trainable": 1). Values are scalars or
     /// comma-separated strings, parsed per-perk by `calc`.
     #[serde(default)]
     pub perks: HashMap<String, Value>,
     /// Whether this unit needs a boat to be sent on invasion. Absent in the data ⇒
-    /// true (the round-50 default); flying/amphibious units set `need_boat: false`.
+    /// true by default; flying/amphibious units set `need_boat: false`.
     #[serde(default = "default_true")]
     pub need_boat: bool,
 }
@@ -55,11 +60,9 @@ pub struct Race {
     pub perks: HashMap<String, f64>,
     #[serde(default)]
     pub units: Vec<UnitData>,
-    /// Live in the round-50 *source data*? Mirrors PHP `Race.playable`
-    /// (`Race::where('playable', true)`); round-50 marks classic/legacy variants
-    /// `playable:false`. NB: source-playable is NOT the same as enabled in the
-    /// *live* round — see `GameData::round50_disabled` / `is_round50_live` for the
-    /// admin override (Planewalker is source-playable but disabled live). Default true.
+    /// Live in the pinned source data? Mirrors PHP `Race.playable`
+    /// (`Race::where('playable', true)`). Source-playable can still be overridden
+    /// by the ruleset's live administrative exclusions. Default true.
     #[serde(default = "default_true")]
     pub playable: bool,
 }
@@ -80,13 +83,13 @@ pub struct Spell {
     /// tracks this explicitly when it needs cooldown-aware casting.
     #[serde(default)]
     pub cooldown: i64,
-    /// Effect perks (e.g. "ore_production": 20). All round-50 values are numeric.
+    /// Effect perks (e.g. "ore_production": 20). Values are numeric.
     #[serde(default)]
     pub perks: HashMap<String, f64>,
     /// Races allowed to cast it; `None` = common (any race).
     #[serde(default)]
     pub races: Option<Vec<String>>,
-    /// Live in the current round? (round-50 disables some via active:false.)
+    /// Live in the current round? Disabled entries use `active:false`.
     #[serde(default = "default_true")]
     pub active: bool,
 }
@@ -95,25 +98,32 @@ fn default_true() -> bool {
     true
 }
 
-/// `data/round50.json`: the project-level "what is actually enabled in the LIVE
-/// round 50" override. The source data marks 22 races `playable:true`, but the
-/// live round runs 21 — Planewalker is playable in the source yet was disabled by
-/// the admins. We keep each race's `playable` flag bit-exact with PHP (golden
-/// vectors depend on it) and record the live-round delta HERE. See the note inside
-/// round50.json before editing.
-#[derive(Deserialize, Default)]
-struct Round50Config {
+/// Provenance and any live administrative roster override not represented by
+/// the source `playable` flags.
+#[derive(serde::Serialize, Deserialize, Default, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct RulesetConfig {
     #[serde(default)]
-    disabled_despite_playable: Vec<String>,
+    pub id: String,
+    #[serde(default)]
+    pub round: i64,
+    #[serde(default)]
+    pub source_tag: String,
+    #[serde(default)]
+    pub source_commit: String,
+    #[serde(default)]
+    pub disabled_despite_playable: Vec<String>,
+    #[serde(default)]
+    pub production_overrides: HashMap<String, String>,
 }
 
 pub struct GameData {
     pub techs: HashMap<String, Tech>,
     pub races: HashMap<String, Race>,
     pub spells: HashMap<String, Spell>,
-    /// Race keys that are `playable` in the source but DISABLED in the live
-    /// round 50 (loaded from `data/round50.json`). Used by `is_round50_live`.
-    pub round50_disabled: HashSet<String>,
+    pub ruleset: RulesetConfig,
+    /// Source-playable races disabled by live administration.
+    pub live_disabled: HashSet<String>,
 }
 
 static DATA: OnceLock<GameData> = OnceLock::new();
@@ -122,7 +132,7 @@ pub fn get() -> &'static GameData {
     DATA.get_or_init(load)
 }
 
-/// The round-50 game data, EMBEDDED into the binary at compile time. A shipped app therefore needs
+/// The pinned game data, EMBEDDED into the binary at compile time. A shipped app therefore needs
 /// no external files (it does not read the dev tree's `data/`, which only exists on the dev machine)
 /// and the user cannot accidentally alter the engine's inputs. Updating the game data for a new round
 /// = re-embedding it in a fresh release build. (Previously `load()` read `CARGO_MANIFEST_DIR/../data`
@@ -140,7 +150,11 @@ fn load() -> GameData {
     let techs: HashMap<String, Tech> =
         serde_json::from_str(embedded("techs.json")).expect("parse techs.json");
     let mut races = HashMap::new();
-    for file in DATA_DIR.get_dir("races").expect("embedded data/races").files() {
+    for file in DATA_DIR
+        .get_dir("races")
+        .expect("embedded data/races")
+        .files()
+    {
         if file.path().extension().and_then(|e| e.to_str()) == Some("json") {
             let r: Race = serde_json::from_str(file.contents_utf8().expect("utf8 race json"))
                 .unwrap_or_else(|e| panic!("parse {:?}: {e}", file.path()));
@@ -149,44 +163,47 @@ fn load() -> GameData {
     }
     let spells: HashMap<String, Spell> =
         serde_json::from_str(embedded("spells.json")).expect("parse spells.json");
-    let round50_disabled: HashSet<String> =
-        serde_json::from_str::<Round50Config>(embedded("round50.json"))
-            .expect("parse round50.json")
-            .disabled_despite_playable
-            .into_iter()
-            .collect();
+    let ruleset: RulesetConfig =
+        serde_json::from_str(embedded("ruleset.json")).expect("parse ruleset.json");
+    let live_disabled: HashSet<String> =
+        ruleset.disabled_despite_playable.iter().cloned().collect();
     GameData {
         techs,
         races,
         spells,
-        round50_disabled,
+        ruleset,
+        live_disabled,
     }
 }
 
-/// Is `race_key` enabled in the LIVE round 50 (the 21-race roster)?
-///
-/// Two gates: (1) the race is `playable` in the round-50 source data (mirrors PHP
-/// `Race::where('playable', true)` — classic/legacy variants are `false`), AND
-/// (2) it is not in the round-50 admin-disabled override (`data/round50.json`,
-/// currently just Planewalker). The engine can still *simulate* a disabled race
-/// when handed its key directly (needed for fidelity / golden vectors); this only
-/// governs what selection layers OFFER.
-pub fn is_round50_live(race_key: &str) -> bool {
+/// Is `race_key` offered by the current live ruleset?
+pub fn is_live_race(race_key: &str) -> bool {
     let d = get();
     d.races.get(race_key).map(|r| r.playable).unwrap_or(false)
-        && !d.round50_disabled.contains(race_key)
+        && !d.live_disabled.contains(race_key)
 }
 
-/// All race keys enabled in the live round 50 (the 21-race roster), unsorted.
-/// Selection layers (OVERTURE picker, `python list_races`, full-round break-even
-/// table) use this so only current/active races are offered.
-pub fn round50_live_keys() -> Vec<String> {
+/// All race keys offered by the current live ruleset, unsorted.
+pub fn live_race_keys() -> Vec<String> {
     let d = get();
     d.races
         .values()
-        .filter(|r| r.playable && !d.round50_disabled.contains(&r.key))
+        .filter(|r| r.playable && !d.live_disabled.contains(&r.key))
         .map(|r| r.key.clone())
         .collect()
+}
+
+/// Resolve either an engine spell key or the game's display name to the
+/// canonical data key.
+pub fn spell_key_for_name(name: &str) -> Option<&'static str> {
+    let needle = name.trim();
+    get()
+        .spells
+        .iter()
+        .find(|(key, spell)| {
+            key.eq_ignore_ascii_case(needle) || spell.name.eq_ignore_ascii_case(needle)
+        })
+        .map(|(key, _)| key.as_str())
 }
 
 /// Self-spell perk value (e.g. "ore_production" for an active spell), or 0.
@@ -280,7 +297,7 @@ pub fn spell_cooldown(spell: &str) -> i64 {
 
 /// Can `race` cast `spell` given whether protection has finished? Live (active) self-spell,
 /// either common (no race restriction) or listed for this race, and — when STILL under
-/// protection (`!protection_finished`) — not flagged `invalid_protection`. Mirrors round-50
+/// protection (`!protection_finished`) — not flagged `invalid_protection`. Mirrors
 /// `SpellActionService::castSpell`: `if invalid_protection && !protection_finished → refuse`.
 /// So an `invalid_protection` racial spell (e.g. Undead-rework's Death and Decay, Dark-Elf's
 /// Spellwright's Calling) is refused during protection but becomes castable once out (post-OOP).
@@ -314,12 +331,20 @@ pub fn spell_castable(spell: &str, race: &str) -> bool {
 /// it in even when no Revelation op scouted it. COMMON (race-less) self-spells are excluded:
 /// they're an optional per-player choice, not a standing racial assumption.
 pub fn racial_offense_self_spells(race: &str) -> Vec<&'static str> {
+    const SEND_OFFENSE_PERKS: &[&str] = &[
+        "offense",
+        "offense_from_barren_land",
+        "offense_from_spell",
+        "offense_unit1",
+    ];
     let mut out: Vec<&'static str> = get()
         .spells
         .iter()
         .filter(|(key, sp)| {
             sp.races.is_some() // racial only (skips universal/optional self-spells)
-                && sp.perks.get("offense").copied().unwrap_or(0.0) > 0.0
+                && SEND_OFFENSE_PERKS
+                    .iter()
+                    .any(|perk| sp.perks.get(*perk).copied().unwrap_or(0.0) > 0.0)
                 && spell_castable_in_context(key, race, true) // self + active + allowed for this race
         })
         .map(|(k, _)| k.as_str())
@@ -340,7 +365,7 @@ pub fn tech_perk(researched: &[String], perk: &str) -> f64 {
 
 /// Is `key` unlockable from the researched set?
 ///
-/// Round-50 treats a tech's `requires` list as adjacent unlock routes: no
+/// The live game treats a tech's `requires` list as adjacent unlock routes: no
 /// prereq means available, otherwise any one listed prereq is enough.
 pub fn tech_prereqs_met(key: &str, researched: &[String]) -> bool {
     let d = get();
@@ -378,9 +403,13 @@ mod tests {
     }
 
     #[test]
-    fn round50_live_roster_is_21_reworks_only() {
-        let live: HashSet<String> = round50_live_keys().into_iter().collect();
-        assert_eq!(live.len(), 21, "the live round 50 runs 21 races");
+    fn current_ruleset_and_live_roster_are_source_faithful() {
+        assert_eq!(get().ruleset.id, ENGINE_RULESET_ID);
+        assert_eq!(get().ruleset.round, ENGINE_RULESET_ROUND);
+        assert_eq!(get().ruleset.source_tag, ENGINE_SOURCE_TAG);
+        assert_eq!(get().ruleset.source_commit, ENGINE_SOURCE_COMMIT);
+        let live: HashSet<String> = live_race_keys().into_iter().collect();
+        assert_eq!(live.len(), 21, "round 51 offers 21 races");
 
         // Reworked races: the LIVE variant is the `*-rework` key, never the classic.
         for (classic, rework) in [
@@ -391,30 +420,27 @@ mod tests {
             ("spirit", "spirit-rework"),
             ("wood-elf", "wood-elf-rework"),
         ] {
-            assert!(is_round50_live(rework), "{rework} should be live");
+            assert!(is_live_race(rework), "{rework} should be live");
             assert!(live.contains(rework));
             assert!(
-                !is_round50_live(classic),
-                "{classic} (classic) is not in round 50"
+                !is_live_race(classic),
+                "{classic} (classic) is not in the live ruleset"
             );
             assert!(!live.contains(classic));
         }
 
-        // Planewalker is `playable` in the source but admin-disabled in round 50.
-        assert!(get()
+        // Planewalker is disabled directly in the tagged source.
+        assert!(!get()
             .races
             .get("planewalker")
             .map(|r| r.playable)
             .unwrap_or(false));
-        assert!(
-            !is_round50_live("planewalker"),
-            "planewalker is disabled in round 50"
-        );
+        assert!(!is_live_race("planewalker"));
         assert!(!live.contains("planewalker"));
 
         // Legacy / nox variants are excluded too.
         for dead in ["undead-legacy", "spirit-legacy", "nox"] {
-            assert!(!is_round50_live(dead) && !live.contains(dead));
+            assert!(!is_live_race(dead) && !live.contains(dead));
         }
     }
 }

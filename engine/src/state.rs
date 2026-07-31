@@ -1,4 +1,4 @@
-//! Dominion state — field names mirror the round-50 `dominions` DB columns so that
+//! Dominion state — field names mirror the live `dominions` DB columns so that
 //! engine output can be diffed directly against the PHP oracle's golden vectors.
 
 use serde::{Deserialize, Serialize};

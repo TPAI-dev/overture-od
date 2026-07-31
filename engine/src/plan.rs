@@ -39,6 +39,13 @@ pub fn start_state(sc: &Scenario) -> DominionState {
     config::start_state(&sc.protection_type, sc.days_late, &sc.race)
 }
 
+/// Current round day for an OVERTURE hour. Hour 1 starts day 1, with the daily
+/// boundary repeating at hours 25, 49, 73, and so on. A late start shifts that
+/// clock by the number of completed round days used for its starting resources.
+pub fn round_day_for_hour(days_late: i64, hour: i64) -> i64 {
+    days_late.max(0) + 1 + (hour.max(1) - 1) / 24
+}
+
 /// Run a scenario, returning one snapshot per oracle step.
 pub fn run(sc: &Scenario) -> Vec<DominionState> {
     run_with_events(sc, &[]).expect("empty scenario event replay cannot fail")
@@ -65,9 +72,10 @@ pub fn run_with_events(
     }
     steps.push(s.clone()); // "building_phase_done"
 
-    for actions in &sc.ticks {
+    for (index, actions) in sc.ticks.iter().enumerate() {
+        let round_day = round_day_for_hour(sc.days_late, index as i64 + 1);
         for a in actions {
-            apply_action(&mut s, a);
+            apply_action_at_round_day(&mut s, a, round_day);
         }
         protection_tick(&mut s);
         steps.push(s.clone());
@@ -84,8 +92,9 @@ pub fn run_with_events(
         // a compared golden FIELD, and calc/tick never read it). This gates `invalid_protection`
         // racial spells: refused under protection, castable now (e.g. Undead Death and Decay).
         s.protection_finished = true;
+        let round_day = round_day_for_hour(sc.days_late, sc.ticks.len() as i64 + 1);
         for a in &sc.oop_actions {
-            apply_action(&mut s, a);
+            apply_action_at_round_day(&mut s, a, round_day);
         }
         steps.push(s.clone());
     }
@@ -93,10 +102,11 @@ pub fn run_with_events(
     // Post-OOP hours (49..N): the same per-hour economy as protection, with any explicit
     // scenario events applied after actions and before `post_oop_tick`.
     for (index, actions) in sc.post_oop_ticks.iter().enumerate() {
-        for a in actions {
-            apply_action(&mut s, a);
-        }
         let hour = scenario_event::FIRST_EVENT_HOUR + index as i64;
+        let round_day = round_day_for_hour(sc.days_late, hour);
+        for a in actions {
+            apply_action_at_round_day(&mut s, a, round_day);
+        }
         scenario_event::apply_events_for_hour(&mut s, events, hour)?;
         post_oop_tick(&mut s);
         steps.push(s.clone());
@@ -313,6 +323,12 @@ fn post_oop_tick(s: &mut DominionState) {
 }
 
 pub fn apply_action(s: &mut DominionState, a: &Value) {
+    apply_action_at_round_day(s, a, 1);
+}
+
+/// Apply one action with the simulated current round day available to mechanics
+/// whose live formulas read the round clock.
+pub fn apply_action_at_round_day(s: &mut DominionState, a: &Value, round_day: i64) {
     match a["type"].as_str().unwrap_or("") {
         "explore" => {
             let plat_per = calc::explore_platinum_cost(s);
@@ -349,8 +365,8 @@ pub fn apply_action(s: &mut DominionState, a: &Value) {
                     });
                 }
             }
-            s.resource_platinum -= calc::construct_platinum_total_cost(s, total);
-            s.resource_lumber -= calc::construct_lumber_total_cost(s, total);
+            s.resource_platinum -= calc::construct_platinum_total_cost(s, total, round_day);
+            s.resource_lumber -= calc::construct_lumber_total_cost(s, total, round_day);
             s.discounted_land = (s.discounted_land - total).max(0);
         }
         "rezone" => {

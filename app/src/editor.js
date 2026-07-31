@@ -972,6 +972,10 @@ export function createEditor(deps) {
     const override = overrideOn ? inv.casualtiesOverride : [0, 0, 0, 0];
     const units = (meta().units || []).slice(0, 4);
     const military = row.military || {};
+    const needsBoat = (unit, idx) => {
+      const live = Array.isArray(row.unitNeedsBoat) ? row.unitNeedsBoat[idx] : undefined;
+      return typeof live === "boolean" ? live : unit.needBoat !== false;
+    };
     const activeSpells = (row.spells || []).map((spell) => (meta().spells || []).find((item) => item.key === spell.key)?.name || spell.key.replace(/_/g, " "));
 
     host.innerHTML = `${switcher}${editBar}
@@ -983,7 +987,7 @@ export function createEditor(deps) {
           ${numField("evTargetDp", "target DP", targetDp, "--c-dp")}
         </div>
         <div class="event-units">${units.map((unit, idx) => `<label class="event-unit">
-          <span><b>${esc(unit.name)}</b><small>${unit.offense || 0}o/${unit.defense || 0}d · ${unit.returnHours || 12}h return${unit.needBoat === false ? " · no boat" : ""}</small></span>
+          <span><b>${esc(unit.name)}</b><small>${unit.offense || 0}o/${unit.defense || 0}d · ${unit.returnHours || 12}h return${needsBoat(unit, idx) ? "" : " · no boat"}</small></span>
           <input class="ev-sent" id="evSent${idx + 1}" type="number" min="0" inputmode="numeric" value="${sent[idx] | 0}" aria-label="${esc(unit.name)} sent">
           <em>${int(military["u" + (idx + 1)] || 0)} home</em>
         </label>`).join("")}</div>
@@ -1068,9 +1072,10 @@ export function createEditor(deps) {
       const ranked = units.map((unit, idx) => ({ unit, idx })).sort((a, b) => (b.unit.offense || 0) - (a.unit.offense || 0));
       for (const { unit, idx } of ranked) {
         const available = military["u" + (idx + 1)] || 0;
-        const take = (unit.offense || 0) <= 0 ? 0 : (unit.needBoat === false ? available : Math.min(available, seats));
+        const boatRequired = needsBoat(unit, idx);
+        const take = (unit.offense || 0) <= 0 ? 0 : (boatRequired ? Math.min(available, seats) : available);
         host.querySelector(`#evSent${idx + 1}`).value = String(take);
-        if (unit.needBoat !== false) seats -= take;
+        if (boatRequired) seats -= take;
       }
       schedulePreview();
     };

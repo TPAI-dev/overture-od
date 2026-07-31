@@ -1000,10 +1000,10 @@ pub fn construct_lumber_cost(s: &DominionState) -> i64 {
 }
 
 /// Fraction of normal construction cost paid on a qualified conquered acre.
-/// ConstructionCalculator derives this from the configured round duration and
+/// ConstructionCalculator derives this from the current day of the round and
 /// clamps the result to 35%-50%, rounded to four decimal places.
-pub fn discounted_land_multiplier() -> f64 {
-    let additional_discount = 0.0075 * (ROUND_DURATION_DAYS as f64 + 42.0) - 0.0025;
+pub fn discounted_land_multiplier(round_day: i64) -> f64 {
+    let additional_discount = 0.0075 * (round_day.max(1) as f64 + 42.0) - 0.0025;
     php_round(clamp(1.0 - additional_discount, 0.35, 0.50), 4)
 }
 
@@ -1013,12 +1013,12 @@ fn discounted_construction_acres(s: &DominionState, acres: i64) -> i64 {
 
 /// Exact total platinum cost for `acres`, including the aggregate rceil used by
 /// the live discounted-land calculation.
-pub fn construct_platinum_total_cost(s: &DominionState, acres: i64) -> i64 {
+pub fn construct_platinum_total_cost(s: &DominionState, acres: i64, round_day: i64) -> i64 {
     let acres = acres.max(0);
     let per_acre = construct_platinum_cost(s);
     let discounted = discounted_construction_acres(s, acres);
     let savings = if discounted > 0 {
-        rceil(per_acre as f64 * discounted as f64 * (1.0 - discounted_land_multiplier()))
+        rceil(per_acre as f64 * discounted as f64 * (1.0 - discounted_land_multiplier(round_day)))
     } else {
         0
     };
@@ -1027,12 +1027,12 @@ pub fn construct_platinum_total_cost(s: &DominionState, acres: i64) -> i64 {
 
 /// Exact total lumber cost for `acres`, including the aggregate rceil used by
 /// the live discounted-land calculation.
-pub fn construct_lumber_total_cost(s: &DominionState, acres: i64) -> i64 {
+pub fn construct_lumber_total_cost(s: &DominionState, acres: i64, round_day: i64) -> i64 {
     let acres = acres.max(0);
     let per_acre = construct_lumber_cost(s);
     let discounted = discounted_construction_acres(s, acres);
     let savings = if discounted > 0 {
-        rceil(per_acre as f64 * discounted as f64 * (1.0 - discounted_land_multiplier()))
+        rceil(per_acre as f64 * discounted as f64 * (1.0 - discounted_land_multiplier(round_day)))
     } else {
         0
     };

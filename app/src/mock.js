@@ -93,7 +93,7 @@ export function simulate(plan) {
   }
   let peasants = 1000, draftees = 300;
   let plat = 120000, food = 15000, lumber = 15000, ore = 0, mana = 0, gems = 0, tech = 0, boats = 0;
-  let morale = 100, prestige = 250, draftRate = 90;
+  let morale = 100, prestige = 250, draftRate = 90, discountedLand = 0;
   const techs = [];
   const spells = {};            // key -> remaining hours
   const queue = [];             // {arrive, kind, ...}
@@ -125,6 +125,12 @@ export function simulate(plan) {
   const constructLumber = () => r(87.5 + 0.285 * (totalLand() - 250));
   const rezonePlat = () => r(250 + 0.6 * (totalLand() - 250));
   const techCost = () => Math.max(3750, r(2.5 * totalLand() + 50 * techs.length));
+  const roundDay = () => Math.max(1, (plan.daysLate | 0) + 1 + Math.floor((Math.max(1, currentHour) - 1) / 24));
+  const discountedLandMultiplier = () => Math.round(Math.min(0.50, Math.max(0.35, 1 - (0.0075 * (roundDay() + 42) - 0.0025))) * 10000) / 10000;
+  const discountedConstructionCost = (perAcre, count) => {
+    const n = Math.max(0, count | 0), discounted = Math.min(n, Math.max(0, discountedLand | 0));
+    return perAcre * n - (discounted > 0 ? rceil(perAcre * discounted * (1 - discountedLandMultiplier())) : 0);
+  };
   const incoming = () => queue.filter((q) => q.kind === "land").reduce((a, q) => a + q.n, 0);
   const incomingByType = () => Object.fromEntries(LAND_TYPES.map((t) => [t, queue.filter((q) => q.kind === "land" && (q.land || "plain") === t).reduce((a, q) => a + q.n, 0)]));
   const away = () => {
@@ -148,7 +154,12 @@ export function simulate(plan) {
     train.spies = { platinum: 500 }; train.wizards = { platinum: 500 };
     const spell = {};
     for (const k in SPELL_MANA) spell[k] = r(SPELL_MANA[k] * totalLand());
-    return { explorePlat: explorePlat(), exploreDraftee: exploreDraftee(), constructPlat: constructPlat(), constructLumber: constructLumber(), rezonePlat: rezonePlat(), techCost: techCost(), train, spell };
+    return {
+      explorePlat: explorePlat(), exploreDraftee: exploreDraftee(),
+      constructPlat: constructPlat(), constructLumber: constructLumber(),
+      constructDiscountMultiplier: discountedLandMultiplier(),
+      rezonePlat: rezonePlat(), techCost: techCost(), train, spell,
+    };
   }
 
   // Mock parity for the engine's caps/employment emits (approximate, preview-only).
@@ -185,7 +196,7 @@ export function simulate(plan) {
     const foodNet = foodGross - r(population * 0.25) - r(food * 0.01);
     const freeLandByType = Object.fromEntries(LAND_TYPES.map((t) => [t, land[t] - builtOn(t) - constructingOn(t)]));
     return {
-      hour, rem: 48 - hour,
+      hour, roundDay: roundDay(), rem: 48 - hour,
       land: totalLand(), landBy: { ...land }, incoming: incoming(), incomingByType: incomingByType(), barren: barren(), freeLandByType,
       peasants, draftees, population, populationMilitary: popMil, maxPop: maxPop(), employed: employed(), jobs: jobs(),
       platinum: plat, food, lumber, ore, mana, gems, tech, boats,
@@ -193,18 +204,19 @@ export function simulate(plan) {
       gemPerHr: b.diamond_mine * 15, techPerHr: techPerHr(), boatsPerHr: b.dock / 20,
       trainedRaw: trainedRaw(), trainedModded: trainedRaw() * mult(), mult: mult(),
       trainedOpRaw: trainedOpRaw(), trainedOpModded: trainedOpRaw() * opMult(), opMult: opMult(),
-      morale, prestige, draftRate,
+      morale, prestige, draftRate, discountedLand,
       dailyPlatinum: dailyPlat, dailyLand: dailyLand, techs: [...techs],
       costs: costs(),
       caps: capsOf(), employment: employmentOf(),
       buildings: { ...b }, military: { ...mil, draftees }, away: aw,
+      unitNeedsBoat: [true, true, true, true],
       spells: Object.entries(spells).filter(([, d]) => d > 0).map(([k, d]) => ({ key: k, dur: d })),
       actions: (plan.hours && plan.hours[hour - 1]) || [],
       events: eventsByHour.get(hour) || [],
     };
   }
 
-  { const r0 = snapshot(0); r0.enter = { mana, dailyPlatinum: dailyPlat, dailyLand: dailyLand, peasants }; rows.push(r0); }
+  { const r0 = snapshot(0); r0.enter = { mana, dailyPlatinum: dailyPlat, dailyLand: dailyLand, peasants, discountedLand }; rows.push(r0); }
 
   const eventEnd = Math.max(0, ...(plan.events || []).map((e) => Math.min(528, Math.max(0, e.hour | 0)) + (e.type === "invasion" ? 11 : 0)));
   const HOURS = Math.max((plan.hours || []).length || 48, eventEnd); // includes the +12 arrival row
@@ -216,7 +228,10 @@ export function simulate(plan) {
     // Arrivals are part of the entering wallet for this hour.
     for (const q of queue.filter((q) => q.arrive === h)) {
       if (q.kind === "build") b[q.building] += q.n;
-      else if (q.kind === "land") land[q.land || "plain"] += q.n;
+      else if (q.kind === "land") {
+        land[q.land || "plain"] += q.n;
+        if (q.discounted) discountedLand += q.n;
+      }
       else if (q.kind === "unit") mil["u" + q.slot] += q.n;
       else if (q.kind === "return") mil["u" + q.slot] += q.n;
       else if (q.kind === "espionage") mil[q.unit] += q.n;
@@ -227,7 +242,7 @@ export function simulate(plan) {
     const acts = (plan.hours && plan.hours[h - 1]) || [];
     // Capture the ENTERING wallet (E_H) the log exporter re-gates from, BEFORE this hour's
     // instant actions mutate the pools (mana / daily-claim flags / peasants).
-    const enter = { mana, dailyPlatinum: dailyPlat, dailyLand: dailyLand, peasants };
+    const enter = { mana, dailyPlatinum: dailyPlat, dailyLand: dailyLand, peasants, discountedLand };
     // Instant actions FIRST — they affect THIS tick's balances (spell mana spent from the
     // current pool, daily claims, rezones, queued-build/explore/train payments). costs() is
     // recomputed per action, so a same-tick claim_land escalates the rezone/build after it.
@@ -240,7 +255,9 @@ export function simulate(plan) {
         land[a.from] -= n; land[a.to] += n; plat -= c.rezonePlat * n;     // no clamp → can go negative
       } else if (a.type === "construct") {
         const n = a.n | 0;
-        plat -= c.constructPlat * n; lumber -= c.constructLumber * n;
+        plat -= discountedConstructionCost(c.constructPlat, n);
+        lumber -= discountedConstructionCost(c.constructLumber, n);
+        discountedLand = Math.max(0, discountedLand - n);
         queue.push({ arrive: h + 12, kind: "build", building: a.building, n });
       } else if (a.type === "explore") {
         const n = a.n | 0, lt = LAND_TYPES.includes(a.land) ? a.land : "plain";
@@ -339,7 +356,9 @@ export function simulate(plan) {
       }
       const byType = Object.fromEntries(LAND_TYPES.map((t) => [t, Math.max(0, (ev.landByType && ev.landByType[t]) | 0)]));
       const landTotal = Object.values(byType).reduce((a, n) => a + n, 0);
-      for (const [lt, n] of Object.entries(byType)) if (n > 0) queue.push({ arrive: h + 12, kind: "land", land: lt, n });
+      for (const [lt, n] of Object.entries(byType)) if (n > 0) {
+        queue.push({ arrive: h + 12, kind: "land", land: lt, n, discounted: ratio >= 0.75 });
+      }
       const slowest = Math.max(...sent.map((n, i) => n > 0 ? returnHours[i] : 0));
       if ((ev.prestige | 0) > 0) queue.push({ arrive: h + slowest, kind: "prestige", n: ev.prestige | 0 });
       const moraleDelta = -5; morale = Math.max(0, morale + moraleDelta);
@@ -387,14 +406,17 @@ export function simulate(plan) {
   currentHour = HOURS + 1;
   for (const q of queue.filter((q) => q.arrive === currentHour)) {
     if (q.kind === "build") b[q.building] += q.n;
-    else if (q.kind === "land") land[q.land || "plain"] += q.n;
+    else if (q.kind === "land") {
+      land[q.land || "plain"] += q.n;
+      if (q.discounted) discountedLand += q.n;
+    }
     else if (q.kind === "unit" || q.kind === "return") mil["u" + q.slot] += q.n;
     else if (q.kind === "espionage") mil[q.unit] += q.n;
     else if (q.kind === "prestige") prestige += q.n;
     else if (q.kind === "boats") boats += q.n;
   }
   for (let i = queue.length - 1; i >= 0; i--) if (queue[i].arrive === currentHour) queue.splice(i, 1);
-  { const endRow = snapshot(currentHour); endRow.enter = { mana, dailyPlatinum: dailyPlat, dailyLand: dailyLand, peasants }; rows.push(endRow); }
+  { const endRow = snapshot(currentHour); endRow.enter = { mana, dailyPlatinum: dailyPlat, dailyLand: dailyLand, peasants, discountedLand }; rows.push(endRow); }
 
   // `final` = the OOP headline = the entering-hour-49 row (NOT the post-OOP end). (The mock
   // doesn't model the OOP Ares boost, so OOP DP here is approximate — NOT game-accurate.)

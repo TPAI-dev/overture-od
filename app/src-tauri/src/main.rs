@@ -235,7 +235,7 @@ fn free_land_by_type(s: &DominionState, off: &HashMap<String, i64>) -> Value {
 /// NEW action the editor prices off them is the next one in line, applied after everything
 /// already queued this hour, so Σ(count × unit_cost) ≤ the remaining wallet is exact even
 /// across a same-tick claim → rezone → build chain.
-fn costs_json(s: &DominionState) -> Value {
+fn costs_json(s: &DominionState, round_day: i64) -> Value {
     let land = s.total_land() as f64;
     // Per-unit training cost, data-driven for every race (mirrors plan.rs::unit_train_cost
     // + TrainingCalculator): every resource present in the race's unit data, scaled by the
@@ -258,7 +258,7 @@ fn costs_json(s: &DominionState) -> Value {
         "exploreDraftee": calc::explore_draftee_cost(s),
         "constructPlat": calc::construct_platinum_cost(s),
         "constructLumber": calc::construct_lumber_cost(s),
-        "constructDiscountMultiplier": calc::discounted_land_multiplier(),
+        "constructDiscountMultiplier": calc::discounted_land_multiplier(round_day),
         "rezonePlat": calc::rezone_platinum_cost(s),
         "techCost": calc::tech_cost(s),
         "train": {
@@ -323,7 +323,13 @@ fn employment_json(s: &DominionState) -> Value {
 
 /// Map one engine state to the app's per-hour row (field names match `mock.js`,
 /// so the engine and the preview mock are interchangeable behind `bridge.js`).
-fn row_json(s: &DominionState, hour: i64, actions: Value, off: &HashMap<String, i64>) -> Value {
+fn row_json(
+    s: &DominionState,
+    hour: i64,
+    round_day: i64,
+    actions: Value,
+    off: &HashMap<String, i64>,
+) -> Value {
     let mult = calc::defensive_power_multiplier(s) * calc::morale_multiplier(s);
     let traw = trained_raw(s);
     // Offensive power (target-less base), symmetric with the trained-DP fields.
@@ -337,6 +343,7 @@ fn row_json(s: &DominionState, hour: i64, actions: Value, off: &HashMap<String, 
         .collect();
     json!({
         "hour": hour,
+        "roundDay": round_day,
         "rem": 48 - hour,
         "land": s.total_land(),
         "landBy": {
@@ -385,7 +392,7 @@ fn row_json(s: &DominionState, hour: i64, actions: Value, off: &HashMap<String, 
         "dailyLand": s.daily_land,
         "draftRate": s.draft_rate,
         "techs": s.techs.clone(),
-        "costs": costs_json(s),
+        "costs": costs_json(s, round_day),
         "caps": caps_json(s),
         "employment": employment_json(s),
         "buildings": buildings_json(s),
@@ -396,6 +403,10 @@ fn row_json(s: &DominionState, hour: i64, actions: Value, off: &HashMap<String, 
             "spies": s.military_spies, "assassins": s.military_assassins,
             "wizards": s.military_wizards, "archmages": s.military_archmages,
         },
+        "unitNeedsBoat": [
+            calc::unit_need_boat(s, 1), calc::unit_need_boat(s, 2),
+            calc::unit_need_boat(s, 3), calc::unit_need_boat(s, 4),
+        ],
         "away": away_json(s),
         "spells": spells,
         "actions": actions,
@@ -489,6 +500,7 @@ fn simulate(plan: Value) -> Result<Value, String> {
 
     let mut rows = Vec::with_capacity(last_hour + 1);
     for h in 0..=last_hour {
+        let round_day = plan::round_day_for_hour(sc.days_late, h as i64);
         // Row H shows the dominion DURING hour H *after its instant actions* (A_H). states[idx]
         // is the entering wallet E_H (pre-action); we clone it and replay hour H's actions
         // through the engine's own apply_action, so the row reflects this tick's INSTANT effects
@@ -515,7 +527,7 @@ fn simulate(plan: Value) -> Result<Value, String> {
                 .unwrap_or(&[])
         };
         for a in acts_h {
-            plan::apply_action(&mut disp, a);
+            plan::apply_action_at_round_day(&mut disp, a, round_day);
         }
         let event_outcomes = if h as i64 >= scenario_event::FIRST_EVENT_HOUR {
             scenario_event::apply_events_for_hour(&mut disp, &events, h as i64)?
@@ -529,7 +541,7 @@ fn simulate(plan: Value) -> Result<Value, String> {
         } else {
             json!([])
         };
-        let mut row = row_json(&disp, h as i64, actions, &off);
+        let mut row = row_json(&disp, h as i64, round_day, actions, &off);
         // The log exporter re-derives each hour's actions from the ENTERING wallet (E_H) — it
         // gates self-spells on the entering mana and skips already-claimed dailies — so it needs
         // the pre-action mana / daily-claim flags / peasants that the A_H display state no longer
@@ -560,8 +572,18 @@ fn simulate(plan: Value) -> Result<Value, String> {
     // protection tick (= entering hour P+1). Either way it equals row P+1, so the headline and
     // the OOP ledger row agree.
     let oop_hour = prot + 1;
-    let oop_idx = if has_oop { BASE + prot + 1 } else { states.len() - 1 };
-    let last = row_json(&states[oop_idx], oop_hour as i64, json!([]), &off);
+    let oop_idx = if has_oop {
+        BASE + prot + 1
+    } else {
+        states.len() - 1
+    };
+    let last = row_json(
+        &states[oop_idx],
+        oop_hour as i64,
+        plan::round_day_for_hour(sc.days_late, oop_hour as i64),
+        json!([]),
+        &off,
+    );
     let tmod = last
         .get("trainedModded")
         .and_then(Value::as_f64)

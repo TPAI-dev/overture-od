@@ -92,6 +92,8 @@ export function createEditor(deps) {
     ore: { key: "ore", label: "ore", c: "--c-ore", get: (r) => r.ore },
     mana: { key: "mana", label: "mana", c: "--c-mana", get: (r) => r.mana },
     gems: { key: "gems", label: "gems", c: "--c-gems", get: (r) => r.gems },
+    spies: { key: "spies", label: "spies", c: "--text-dim", get: (r) => (r.military || {}).spies || 0 },
+    wizards: { key: "wizards", label: "wiz", c: "--text-dim", get: (r) => (r.military || {}).wizards || 0 },
     dp: { key: "dp", label: "DP", c: "--c-dp", get: (r) => Math.round(r.trainedModded || 0) },
   };
   const buildStateCols = [SC.land, SC.plat, SC.lumber, SC.dp];
@@ -142,8 +144,7 @@ export function createEditor(deps) {
       return maxDetailed(w, { type, land: key, n: 0 });
     }
     const t = c.train[key] || {};
-    for (const [res, per] of Object.entries(t)) w[res] += cur * per;
-    w.draftees += cur;
+    for (const [res, per] of Object.entries(t)) w[res] = (w[res] || 0) + cur * per;
     return maxDetailed(w, { type, slot: key, n: 0 });
   }
   // Shared opts for every embedded window: centered on the current editor hour, refreshing the
@@ -169,9 +170,15 @@ export function createEditor(deps) {
     return {
       platinum: row.platinum, lumber: row.lumber, ore: row.ore, mana: row.mana,
       gems: row.gems, tech: row.tech || 0, draftees: row.draftees, peasants: row.peasants || 0,
+      spies: m.spies || 0, assassins: m.assassins || 0,
+      wizards: m.wizards || 0, archmages: m.archmages || 0,
       free: { ...row.freeLandByType },
       buildings: { ...row.buildings },
-      units: { u1: m.u1 || 0, u2: m.u2 || 0, u3: m.u3 || 0, u4: m.u4 || 0, draftees: row.draftees },
+      units: {
+        u1: m.u1 || 0, u2: m.u2 || 0, u3: m.u3 || 0, u4: m.u4 || 0,
+        draftees: row.draftees, spies: m.spies || 0, assassins: m.assassins || 0,
+        wizards: m.wizards || 0, archmages: m.archmages || 0,
+      },
       dailyPlatinum: row.dailyPlatinum, dailyLand: row.dailyLand,
       discountedLand: row.discountedLand || 0,
       techs: [...(row.techs || [])],
@@ -215,10 +222,14 @@ export function createEditor(deps) {
         break;
       }
       case "train": {
-        const t = c.train[a.slot] || {}; // {resource: per-unit cost} — any of platinum/ore/mana/lumber/gems
-        r = need("draftees", n);
+        const t = c.train[a.slot] || {}; // {wallet/military pool: per-unit cost}
         for (const [res, per] of Object.entries(t)) if (!r) r = need(res, n * per);
-        if (!dry) { for (const [res, per] of Object.entries(t)) w[res] -= n * per; w.draftees -= n; w.units.draftees -= n; }
+        if (!dry) {
+          for (const [res, per] of Object.entries(t)) {
+            w[res] = (w[res] || 0) - n * per;
+            if (w.units[res] != null) w.units[res] -= n * per;
+          }
+        }
         break;
       }
       case "spell": {
@@ -290,7 +301,7 @@ export function createEditor(deps) {
       case "explore": cands = [
         { n: f(w.platinum / Math.max(1, c.explorePlat)), why: "platinum" },
         { n: f(w.draftees / Math.max(1, c.exploreDraftee)), why: "draftees" }]; break;
-      case "train": { const t = c.train[a.slot] || {}; cands = [{ n: w.draftees, why: "draftees" }];
+      case "train": { const t = c.train[a.slot] || {}; cands = [];
         for (const [res, per] of Object.entries(t)) cands.push({ n: f(w[res] / Math.max(1, per)), why: res }); break; }
       case "bank": { const s = (a.source || "").replace("resource_", ""); cands = [{ n: w[s] ?? 0, why: s }]; break; }
       case "improve": cands = [{ n: w[a.resource] ?? 0, why: a.resource }]; break;
@@ -680,7 +691,7 @@ export function createEditor(deps) {
     } else if (tab === "rezone") {
       renderRezoneTable(c);
     } else if (tab === "explore") {
-      // Every land type is legally explorable in the round-50 game: LandHelper::getLandTypes()
+      // Every land type is legally explorable in the game: LandHelper::getLandTypes()
       // returns all 7 and ExploreActionService accepts land_<type> for any of them (cost is
       // land-total-based, not type-based). Don't pre-restrict the option set — offer all 7.
       const host = document.getElementById("edForm");
@@ -705,9 +716,12 @@ export function createEditor(deps) {
       if (trainDir === "train") {
         // Exclude not_trainable units (e.g. Planewalker's summoned slots) — the game can't train them.
         const units = (meta().units || []).filter((u) => u.trainable !== false).map((u) => ({ slot: u.slot, name: u.name }));
-        // Spies & wizards (500 platinum + 1 draftee) — trainable in protection.
-        if (c.train && c.train.spies) units.push({ slot: "spies", name: "Spy" });
-        if (c.train && c.train.wizards) units.push({ slot: "wizards", name: "Wizard" });
+        // Common covert/magic units use the same exact engine cost table. This
+        // includes source-unit upgrades and Arcane Infusion's Archmage override.
+        for (const [slot, name] of [
+          ["spies", "Spy"], ["assassins", "Assassin"],
+          ["wizards", "Wizard"], ["archmages", "Archmage"],
+        ]) if (c.train && c.train[slot]) units.push({ slot, name });
         if (!units.some((u) => String(u.slot) === String(trainSel))) trainSel = units[0] ? units[0].slot : 1;
         const chips = units.map((u) => `<button type="button" class="bld-chip ${String(u.slot) === String(trainSel) ? "on" : ""}" data-s="${u.slot}">${u.name}</button>`).join("");
         const host = document.getElementById("edForm");
@@ -715,12 +729,15 @@ export function createEditor(deps) {
         const mountSel = () => {
           const t = c.train[trainSel] || {};
           const n = document.getElementById("trainNote");
-          if (n) n.textContent = `${Object.entries(t).map(([res, per]) => `${int(per)} ${res}`).join(" + ") || "—"} + 1 draftee each · spies/wizards & draftees are NOT counted toward the DP target · type counts down the hours`;
+          if (n) n.textContent = `${Object.entries(t).map(([res, per]) => `${int(per)} ${res}`).join(" + ") || "—"} each · covert/magic units and draftees are NOT counted toward the DP target · type counts down the hours`;
           // State columns track what THIS unit actually spends: platinum, its secondary cost resource
           // (ore / lumber / mana / gems — whichever this race's unit costs, if any), then draftees + DP.
           const sc = [SC.plat];
           for (const res of ["ore", "lumber", "mana", "gems"]) if ((t[res] || 0) > 0) sc.push(SC[res]);
-          sc.push(SC.draft, SC.dp);
+          if ((t.draftees || 0) > 0) sc.push(SC.draft);
+          if ((t.spies || 0) > 0) sc.push(SC.spies);
+          if ((t.wizards || 0) > 0) sc.push(SC.wizards);
+          sc.push(SC.dp);
           mountHourGrid(document.getElementById("edHg"), windowOpts({
             label: (units.find((u) => String(u.slot) === String(trainSel)) || {}).name || ("slot " + trainSel), color: "--c-dp", stateCols: sc,
             read: (h) => laneRead(h, (a) => a.type === "train" && String(a.slot) === String(trainSel)),
@@ -970,7 +987,12 @@ export function createEditor(deps) {
     const landTotal = LAND_TYPES.reduce((sum, land) => sum + (landBy[land] | 0), 0);
     const overrideOn = !!(inv && Array.isArray(inv.casualtiesOverride));
     const override = overrideOn ? inv.casualtiesOverride : [0, 0, 0, 0];
-    const units = (meta().units || []).slice(0, 4);
+    const units = (meta().units || []).slice(0, 4).map((unit, idx) => ({
+      ...unit,
+      offense: (row.unitOffense || [])[idx] ?? unit.offense,
+      needBoat: (row.unitNeedBoat || [])[idx] ?? unit.needBoat,
+      returnHours: (row.unitReturnHours || [])[idx] ?? unit.returnHours,
+    }));
     const military = row.military || {};
     const needsBoat = (unit, idx) => {
       const live = Array.isArray(row.unitNeedsBoat) ? row.unitNeedsBoat[idx] : undefined;
@@ -1005,7 +1027,7 @@ export function createEditor(deps) {
       <div class="event-section casualty-section">
         <div class="event-section-head"><span>3 · casualties</span><label class="event-check"><input id="evOverrideOn" type="checkbox" ${overrideOn ? "checked" : ""}> manually override</label></div>
         <div class="casualty-grid">${units.map((unit, idx) => `<div class="casualty-cell"><span>${esc(unit.name)}</span><b id="evCalc${idx + 1}">—</b><input class="ev-casualty" id="evCas${idx + 1}" type="number" min="0" inputmode="numeric" value="${override[idx] | 0}" aria-label="${esc(unit.name)} casualty override" ${overrideOn ? "" : "hidden"}></div>`).join("")}</div>
-        <div class="ed-note">Deaths are permanent and do <b>not</b> become draftees. They free total-pop space immediately; survivors stay in population and food use while away.</div>
+        <div class="ed-note">Deaths are permanent and do <b>not</b> become draftees. They free total-pop space immediately; converted troops occupy population, and all returners stay in population and food use while away.</div>
       </div>
 
       <div class="event-preview" id="eventPreview"><span class="event-muted">Enter an army to calculate the hit.</span></div>
@@ -1108,13 +1130,21 @@ export function createEditor(deps) {
           cell.textContent = int(count); cell.dataset.raw = String(count);
         });
         const casualtyTotal = (out.casualties || []).reduce((sum, count) => sum + count, 0);
+        const convertedTotal = (out.converted || []).reduce((sum, count) => sum + count, 0);
         const returnGroups = new Map();
-        (out.survivors || []).forEach((count, idx) => { if (count > 0) { const ret = out.returnHours[idx]; returnGroups.set(ret, (returnGroups.get(ret) || 0) + count); } });
+        (out.survivors || []).forEach((count, idx) => {
+          const returning = count + ((out.converted || [])[idx] || 0);
+          if (returning > 0) { const ret = out.returnHours[idx]; returnGroups.set(ret, (returnGroups.get(ret) || 0) + returning); }
+        });
         const returns = [...returnGroups.entries()].sort((a, b) => a[0] - b[0]).map(([ret, count]) => `${int(count)} troops H${hour + ret}`).join(" · ");
         const landArrival = out.landReturnHour ? `${int(out.landTotal)} acres at H${out.landReturnHour}` : `${int(out.landTotal)} acres`;
+        const popText = out.populationFreed >= 0
+          ? `${int(out.populationFreed)} net pop space freed now`
+          : `${int(-out.populationFreed)} net pop added now`;
+        const effects = (out.appliedEffects || []).map((key) => (meta().spells || []).find((spell) => spell.key === key)?.name || key.replace(/_/g, " "));
         preview.innerHTML = `<div class="event-ok-head"><span>✓ successful simulation</span><b>${int(out.op)} OP &gt; ${int(out.targetDp)} DP</b></div>
-          <div class="event-metrics"><span><b>${int(casualtyTotal)}</b> casualties</span><span><b>${int(out.populationFreed)}</b> pop space freed now</span><span><b>${landArrival}</b></span></div>
-          <div class="event-return">${returns || "no troop survivors"}${out.prestigeReturnHour ? ` · ${int(out.prestige)} prestige H${out.prestigeReturnHour}` : ""}</div>`;
+          <div class="event-metrics"><span><b>${int(casualtyTotal)}</b> casualties</span><span><b>${popText}</b></span><span><b>${landArrival}</b></span></div>
+          <div class="event-return">${convertedTotal > 0 ? `${int(convertedTotal)} converted · ` : ""}${returns || "no troop survivors"}${out.prestigeReturnHour ? ` · ${int(out.prestige)} prestige H${out.prestigeReturnHour}` : ""}${effects.length ? ` · applies ${effects.map(esc).join(", ")}` : ""}</div>`;
         lastDraft = draft; add.disabled = false; add.onclick = () => lastDraft && commitEvent(lastDraft);
       } catch (error) {
         if (mine !== previewSerial) return;

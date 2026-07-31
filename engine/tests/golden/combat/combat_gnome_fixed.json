@@ -23,19 +23,26 @@
         "prestige": 250,
         "morale": 100
     },
+    "attackerSpells": [],
+    "attackerTechs": [],
     "unitsSent": {
         "1": 8000,
         "2": 0,
         "3": 0,
         "4": 0
     },
+    "discounted_land": null,
+    "prestige_range_sweep": null,
     "computed": {
         "range": 90,
         "in_range": true,
-        "op": 34400,
+        "op": 32000,
         "temple_reduction": 0,
         "dp_with_temples": 16000,
         "land_lost": 51,
+        "land_lost_by_type": {
+            "plain": 51
+        },
         "success": true,
         "prestige_gain": 67,
         "prestige_loss": -13,
@@ -46,6 +53,19 @@
         "defender_units_lost": {
             "draftees": 48,
             "2": 240
-        }
+        },
+        "converted_units": {},
+        "plunder": {},
+        "salvage": {},
+        "attacker_research_points": 293,
+        "research_return_hours": 12,
+        "return_hours": {
+            "1": 12,
+            "2": 12,
+            "3": 12,
+            "4": 12
+        },
+        "slowest_return_hours": 12,
+        "resource_return_hours": 12
     }
 }

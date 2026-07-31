@@ -1,7 +1,7 @@
 // saves.js — named build library. Persists to localStorage, which works in BOTH the
 // browser preview and the Tauri webview (separate stores; use export/import JSON to
 // move builds between them or back them up). A build = the whole plan object
-// {race, dpTarget, opening, hours, oopActions, events}.
+// {race, dpTarget, opening, hours, oopActions, events, ruleset?}.
 
 const KEY = "overture.builds.v1";
 const read = () => { try { return JSON.parse(localStorage.getItem(KEY)) || []; } catch { return []; } };
@@ -27,6 +27,7 @@ const isPlanShape = (p) =>
 
 export function createSaves(deps) {
   // deps: { getPlan(), applyPlan(plan), getStats(plan)->Promise<{committed,dp,feasible}>, live:bool,
+  //         getRuleset()->{id,round,sourceTag,sourceCommit}|null,
   //         saveBuild(name,plan)->path|null, listSaves()->[{name,path,race,savedAt,dpTarget}]|null,
   //         loadBuild(name)->plan|null, deleteSave(name) }
   //   The save*/listSaves/loadBuild fns return null in the browser → localStorage fallback; in the
@@ -89,6 +90,7 @@ export function createSaves(deps) {
     const raw = (pop.querySelector("#blName").value || "").trim();
     const name = raw || defaultName();
     const plan = clone(deps.getPlan());
+    if (!plan.ruleset && deps.getRuleset) plan.ruleset = clone(deps.getRuleset());
     let savedFs = false;
     if (deps.saveBuild) { try { savedFs = !!(await deps.saveBuild(name, plan)); } catch (_) { savedFs = false; } }
     if (!savedFs) {
@@ -124,8 +126,10 @@ export function createSaves(deps) {
   }
 
   function exportCurrent() {
-    const plan = deps.getPlan();
-    const blob = new Blob([JSON.stringify({ overture: 1, savedAt: Date.now(), plan }, null, 2)], { type: "application/json" });
+    const plan = clone(deps.getPlan());
+    const ruleset = plan.ruleset || (deps.getRuleset && deps.getRuleset()) || null;
+    if (!plan.ruleset && ruleset) plan.ruleset = clone(ruleset);
+    const blob = new Blob([JSON.stringify({ overture: 1, ruleset, savedAt: Date.now(), plan }, null, 2)], { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
     a.download = `${plan.race || "build"}-overture.json`;

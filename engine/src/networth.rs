@@ -1,4 +1,4 @@
-//! Single source of truth for OpenDominion **networth**, bit-exact to the round-50 PHP
+//! Single source of truth for OpenDominion **networth**, aligned with the pinned PHP
 //! game (`../OpenDominion-source/src/Calculators/NetworthCalculator.php`).
 //!
 //! Networth is purely **land + buildings + military** — it encodes NO resources
@@ -25,7 +25,7 @@
 //!
 //! Consequence: elite networth is a **constant** for races without those perks (the
 //! majority), but **drifts** with the dominion's own land mix / prestige / wizard ratio for
-//! the six truly-dynamic round-50 elites (sylvan Dryad, icekin FrostMage, gnome Rockapult,
+//! the dynamic elite units (sylvan Dryad, icekin FrostMage, gnome Rockapult,
 //! demon Succubus — defense-scaling; icekin Ice Elemental, orc Bone Breaker, wood-elf Druid
 //! — offense-scaling). This module reuses the already golden-validated perk math in
 //! [`crate::calc`] so the dynamic cases stay bit-exact rather than re-deriving them.
@@ -75,8 +75,9 @@ pub fn unit_networth(s: &DominionState, slot: usize) -> f64 {
 
     // getUnitPowerWithPerks($dom, null, 1, $unit, …): base + target-less perks. The
     // staggered perk is evaluated at landRatio = 1 (any range ≤ 1 fires); defense has no
-    // staggered perk on any round-50 race, so only the offense side adds it.
-    let mut offense = calc::unit_offense_modified(s, slot) + calc::unit_offense_staggered(s, slot, 1.0);
+    // staggered perk on a live race, so only the offense side adds it.
+    let mut offense =
+        calc::unit_offense_modified(s, slot) + calc::unit_offense_staggered(s, slot, 1.0);
     let mut defense = calc::unit_defense_modified(s, slot);
 
     // NetworthCalculator special case: kobold-rework pairs add +2/+2 before the max.
@@ -192,10 +193,19 @@ mod tests {
 
     #[test]
     fn unit_networth_gnome_juggernaut_staggered_on_at_ratio_one() {
-        // Juggernaut 6.5/3 + offense_staggered "85;0.5" → at landRatio=1 always +0.5 →
-        // off 7.0 → 2·7 = 14 (constant at networth time).
         let g = dom("gnome");
-        assert_eq!(unit_networth(&g, 4), 14.0);
+        let staggered = calc::unit_offense_staggered(&g, 4, 1.0);
+        assert!(
+            staggered > 0.0,
+            "the current Gnome elite retains a networth-time staggered bonus"
+        );
+        let expected = php_round(
+            NW_PER_ELITE_POINT
+                * (calc::unit_offense_modified(&g, 4) + staggered)
+                    .max(calc::unit_defense_modified(&g, 4)),
+            2,
+        );
+        assert_eq!(unit_networth(&g, 4), expected);
     }
 
     // ---- Per-unit networth: dynamic elites drift with the dominion's own state ----
@@ -259,7 +269,7 @@ mod tests {
         s.military_unit4 = 100; // 100 · 12 = 1200 (Cavalry)
         s.military_spies = 25; // 25 · 5 = 125
         s.military_wizards = 25; // 25 · 5 = 125
-        // 5000 + 450 + 500 + 500 + 1200 + 1200 + 125 + 125 = 9100
+                                 // 5000 + 450 + 500 + 500 + 1200 + 1200 + 125 + 125 = 9100
         assert_eq!(dominion_networth(&s), 9100);
     }
 

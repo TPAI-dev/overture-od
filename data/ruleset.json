@@ -1,0 +1,12 @@
+{
+  "_README": "Current executable game-data provenance. Source-derived race, spell, and tech JSON starts from the exact tag and commit below, with explicitly recorded live-production corrections applied afterward. disabledDespitePlayable is only for live administrative exclusions not represented by source playable flags.",
+  "id": "round51",
+  "round": 51,
+  "sourceTag": "1.51.0",
+  "sourceCommit": "35b977df6b47fd24636f920657b5c4edb46bbff7",
+  "disabledDespitePlayable": [],
+  "productionOverrides": {
+    "arcaneInfusionPlatinum": "1400: developer-confirmed live production value on 2026-07-31; the 1.51.0 tag still contains the stale 1350 value",
+    "sylvanCentaurPlatinum": "950: developer-confirmed live production value on 2026-07-31; the 1.51.0 tag still contains the stale 970 value"
+  }
+}

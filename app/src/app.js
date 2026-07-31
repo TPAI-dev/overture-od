@@ -134,7 +134,17 @@ async function restoreFromHistory() {
   if (editor && editor.isOpen()) editor.rerender();
   updateHistoryButtons();
 }
-async function loadMeta(race) { meta = await engine.meta(race); metaRace = race; }
+async function loadMeta(race) {
+  meta = await engine.meta(race);
+  metaRace = race;
+  if (!plan.ruleset && meta.ruleset) plan.ruleset = clonePlan(meta.ruleset);
+  const badge = $("#rulesetBadge");
+  if (badge && meta.ruleset) {
+    badge.textContent = `R${meta.ruleset.round}`;
+    const overrides = Object.values(meta.ruleset.productionOverrides || {});
+    badge.title = `Ruleset ${meta.ruleset.id} · game source ${meta.ruleset.sourceTag} · ${meta.ruleset.sourceCommit}${overrides.length ? ` · live overrides: ${overrides.join("; ")}` : ""}`;
+  }
+}
 
 // Highest ROW index in the current trace (data-driven: protection 0..48 + OOP 49 + post-OOP,
 // plus the trailing post-OOP end row the engine adds). Falls back to the OOP hour pre-trace.
@@ -200,6 +210,7 @@ async function init() {
     getPlan: () => plan,
     applyPlan,
     getStats: async (p) => { const t = await engine.simulate(p); return { committed: t.final.committed, dp: Math.round(t.final.trainedModded), feasible: t.final.feasible }; },
+    getRuleset: () => (meta && meta.ruleset) || null,
     live: engine.live,
     saveBuild: (name, p) => engine.saveBuild(name, p),
     listSaves: () => engine.listSaves(),
@@ -419,7 +430,7 @@ function setModeBadge() {
   if (engine.live) {
     b.className = "mode-badge engine";
     b.textContent = "● BIT-EXACT ENGINE";
-    b.title = "Running the real game engine — every value is bit-exact vs the round-50 game.";
+    b.title = "Running the real game engine compiled from the pinned round-51 ruleset.";
   } else {
     b.className = "mode-badge mock";
     b.textContent = "⚠ MOCK PREVIEW — NOT GAME-ACCURATE";

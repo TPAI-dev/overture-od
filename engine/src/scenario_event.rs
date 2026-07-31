@@ -154,6 +154,7 @@ pub struct EventOutcome {
     pub calculated_casualties: [i64; 4],
     pub casualties: [i64; 4],
     pub survivors: [i64; 4],
+    pub converted: [i64; 4],
     pub return_hours: [i64; 4],
     pub land_by_type: BTreeMap<String, i64>,
     pub land_total: i64,
@@ -167,6 +168,7 @@ pub struct EventOutcome {
     pub population_freed: i64,
     pub manual_override: bool,
     pub boats_sent: i64,
+    pub applied_effects: Vec<String>,
 }
 
 impl EventOutcome {
@@ -179,6 +181,7 @@ impl EventOutcome {
             calculated_casualties: [0; 4],
             casualties: [0; 4],
             survivors: [0; 4],
+            converted: [0; 4],
             return_hours: [0; 4],
             land_by_type: BTreeMap::new(),
             land_total: 0,
@@ -192,6 +195,7 @@ impl EventOutcome {
             population_freed: 0,
             manual_override: false,
             boats_sent: 0,
+            applied_effects: Vec::new(),
         }
     }
 }
@@ -400,10 +404,23 @@ fn apply_invasion(
         }
     }
     let survivors = std::array::from_fn(|idx| sent[idx] - casualties[idx]);
-    let population_freed = casualties
+    let range_pct = combat::dominion_range(calc::total_land(state), target_land);
+    let mut converted = combat::conversions_given(state, &target_state, sent, op, target_dp);
+    let upgrades = combat::conversion_upgrades(state, survivors, range_pct);
+    for slot in 0..4 {
+        converted[slot] += upgrades[slot];
+    }
+    let casualty_total = casualties
         .iter()
         .try_fold(0i64, |total, count| total.checked_add(*count))
         .ok_or_else(|| "casualty total is too large".to_string())?;
+    let converted_total = converted
+        .iter()
+        .try_fold(0i64, |total, count| total.checked_add(*count))
+        .ok_or_else(|| "converted troop total is too large".to_string())?;
+    let population_freed = casualty_total
+        .checked_sub(converted_total)
+        .ok_or_else(|| "net population change is too large".to_string())?;
     let return_hours = std::array::from_fn(|idx| combat::unit_return_hours(state, idx + 1));
     let slowest_return = combat::slowest_unit_return_hours(state, sent);
 
@@ -448,12 +465,18 @@ fn apply_invasion(
     state.resource_boats = (state.resource_boats - boats_sent as f64).max(0.0);
 
     for slot in 1..=4 {
-        if survivors[slot - 1] > 0 {
+        let returning = survivors[slot - 1] + converted[slot - 1];
+        if returning < 0 {
+            return Err(format!(
+                "slot {slot} conversion upgrades exceed surviving troops"
+            ));
+        }
+        if returning > 0 {
             state.queue.push(QueueEntry {
                 source: "invasion".to_string(),
                 resource: format!("military_unit{slot}"),
                 hours: return_hours[slot - 1],
-                amount: survivors[slot - 1],
+                amount: returning,
             });
         }
     }
@@ -478,7 +501,6 @@ fn apply_invasion(
     }
     if land_total > 0 {
         state.stat_total_land_conquered = conquered_total;
-        let range_pct = combat::dominion_range(calc::total_land(state), target_land);
         if range_pct >= 75.0 {
             state.queue.push(QueueEntry {
                 source: "invasion".to_string(),
@@ -497,9 +519,9 @@ fn apply_invasion(
         });
     }
 
-    let range_pct = combat::dominion_range(calc::total_land(state), target_land);
     let morale_delta = -combat::morale_cost(range_pct);
     state.morale = (state.morale + morale_delta).max(0);
+    let applied_effects = combat::apply_post_invasion_self_effects(state, true, range_pct);
 
     Ok(EventOutcome {
         id: id.to_string(),
@@ -509,6 +531,7 @@ fn apply_invasion(
         calculated_casualties: calculated,
         casualties,
         survivors,
+        converted,
         return_hours,
         land_by_type: ordered_land,
         land_total,
@@ -522,6 +545,7 @@ fn apply_invasion(
         population_freed,
         manual_override: casualties_override.is_some(),
         boats_sent,
+        applied_effects,
     })
 }
 

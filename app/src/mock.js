@@ -20,6 +20,16 @@ const BUILDING_LAND = {
 const PLAIN_OK = ["home", "alchemy", "farm", "smithy", "masonry"];
 const LAND_TYPES = ["plain", "swamp", "hill", "mountain", "forest", "cavern", "water"];
 const OOP_HOUR = 49; // hour 49 = out of protection; events begin here
+const RULESET = {
+  id: "round51",
+  round: 51,
+  sourceTag: "1.51.0",
+  sourceCommit: "35b977df6b47fd24636f920657b5c4edb46bbff7",
+  productionOverrides: {
+    arcaneInfusionPlatinum: "1400: developer-confirmed live production value on 2026-07-31; the 1.51.0 tag still contains the stale 1350 value",
+    sylvanCentaurPlatinum: "950: developer-confirmed live production value on 2026-07-31; the 1.51.0 tag still contains the stale 970 value",
+  },
+};
 // Human units: preview-only stats plus exact invasion return hours.
 const UNIT = {
   1: { off: 3, def: 0, plat: 315, ore: 25, h: 9, ret: 12, name: "Spearman", kind: "specialist" },
@@ -46,7 +56,7 @@ export function invasionLandGain(attackerLand, targetLand) {
   return { attackerLand: attacker, targetLand: target, rangePct: ratio * 100, conquered, generated: conquered, gained: conquered * 2 };
 }
 
-// Live round-50 races whose units cost NO ore (so the ore column/inputs hide). PREVIEW-ONLY mirror of
+// Live races whose units cost NO ore (so the ore column/inputs hide). PREVIEW-ONLY mirror of
 // the engine's data-driven `race_has_training_resource` (the real backend computes it from unit costs),
 // kept so the browser preview hides ore per race exactly like the desktop app. Only ORE is per-race;
 // platinum/food/lumber/mana/gems all stay on for everyone (gems = diamond mines, which everyone builds).
@@ -57,7 +67,7 @@ const NO_ORE = new Set(["demon", "firewalker", "lizardfolk", "merfolk", "orc", "
 // preview's per-race resource hiding matches the desktop app.
 export function meta(race) {
   const buildingLand = { ...BUILDING_LAND };
-  delete buildingLand.forest_haven; // round-50: forest_haven is dead code, not buildable
+  delete buildingLand.forest_haven; // dead source entry, not buildable
   return {
     units: [1, 2, 3, 4].map((s) => ({ slot: s, name: UNIT[s].name, defense: UNIT[s].def, offense: UNIT[s].off, plat: UNIT[s].plat, ore: UNIT[s].ore, kind: UNIT[s].kind, returnHours: UNIT[s].ret, needBoat: true, trainable: true })),
     techs: TECHS,
@@ -65,6 +75,7 @@ export function meta(race) {
     resources: { ore: !NO_ORE.has(race) },
     boatCapacity: 30,
     homeLand: "plain", // Human preview; the real backend's meta is data-driven per race
+    ruleset: { ...RULESET, productionOverrides: { ...RULESET.productionOverrides } },
     // Common self-spells (Human preview); the real backend adds each race's racial spells.
     spells: [
       { key: "harmony", name: "Harmony", costMana: 2.5, desc: "+50% population growth" },
@@ -149,9 +160,16 @@ export function simulate(plan) {
     const train = {};
     // Human-only preview: train cost keyed by wallet resource name (matches the engine's
     // data-driven shape so the shared editor/log code works in the browser too).
-    for (const s of [1, 2, 3, 4]) train[s] = { platinum: rceil(UNIT[s].plat * smithyMult()), ore: rceil(UNIT[s].ore * smithyMult()) };
-    // spies/wizards: base 500 platinum (+1 draftee); preview ignores the cost multiplier.
-    train.spies = { platinum: 500 }; train.wizards = { platinum: 500 };
+    for (const s of [1, 2, 3, 4]) {
+      train[s] = { platinum: rceil(UNIT[s].plat * smithyMult()), draftees: 1 };
+      if (UNIT[s].ore > 0) train[s].ore = rceil(UNIT[s].ore * smithyMult());
+    }
+    // Common-unit preview costs. The desktop backend supplies exact modifiers
+    // and Arcane Infusion state; this keeps browser editing structurally faithful.
+    train.spies = { platinum: 500, draftees: 1 };
+    train.assassins = { platinum: 1000, spies: 1 };
+    train.wizards = { platinum: 500, draftees: 1 };
+    train.archmages = { platinum: 1000, wizards: 1 };
     const spell = {};
     for (const k in SPELL_MANA) spell[k] = r(SPELL_MANA[k] * totalLand());
     return {
@@ -204,6 +222,9 @@ export function simulate(plan) {
       gemPerHr: b.diamond_mine * 15, techPerHr: techPerHr(), boatsPerHr: b.dock / 20,
       trainedRaw: trainedRaw(), trainedModded: trainedRaw() * mult(), mult: mult(),
       trainedOpRaw: trainedOpRaw(), trainedOpModded: trainedOpRaw() * opMult(), opMult: opMult(),
+      unitOffense: [1, 2, 3, 4].map((slot) => UNIT[slot].off),
+      unitNeedBoat: [true, true, true, true],
+      unitReturnHours: [1, 2, 3, 4].map((slot) => UNIT[slot].ret),
       morale, prestige, draftRate, discountedLand,
       dailyPlatinum: dailyPlat, dailyLand: dailyLand, techs: [...techs],
       costs: costs(),
@@ -266,12 +287,18 @@ export function simulate(plan) {
         morale = Math.max(0, morale - Math.max(1, Math.floor((n + 2) / 3)));
       } else if (a.type === "train") {
         const n = a.n | 0, t = c.train[a.slot] || {};
-        if (a.slot === "spies" || a.slot === "wizards") {
-          plat -= (t.platinum || 0) * n; draftees -= n;
+        plat -= (t.platinum || 0) * n;
+        ore -= (t.ore || 0) * n;
+        mana -= (t.mana || 0) * n;
+        lumber -= (t.lumber || 0) * n;
+        gems -= (t.gems || 0) * n;
+        draftees -= (t.draftees || 0) * n;
+        mil.spies -= (t.spies || 0) * n;
+        mil.wizards -= (t.wizards || 0) * n;
+        if (typeof a.slot === "string") {
           queue.push({ arrive: h + 12, kind: "espionage", unit: a.slot, n });
         } else {
           const u = UNIT[a.slot]; if (!u) continue;
-          plat -= (t.platinum || 0) * n; ore -= (t.ore || 0) * n; draftees -= n;
           queue.push({ arrive: h + u.h, kind: "unit", slot: a.slot, n });
         }
       } else if (a.type === "spell") {
@@ -364,12 +391,13 @@ export function simulate(plan) {
       const moraleDelta = -5; morale = Math.max(0, morale + moraleDelta);
       outcomes.push({
         id: ev.id, type: "invasion", hour: h, sent, calculatedCasualties: calculated,
-        casualties, survivors, returnHours, landByType: byType, landTotal,
+        casualties, survivors, converted: [0, 0, 0, 0], returnHours, landByType: byType, landTotal,
         landReturnHour: landTotal > 0 ? h + 12 : null, prestige: ev.prestige | 0,
         prestigeReturnHour: (ev.prestige | 0) > 0 ? h + slowest : null,
         op, targetDp, rangePct: ratio * 100, moraleDelta,
         populationFreed: casualties.reduce((a, n) => a + n, 0),
         manualOverride: Array.isArray(ev.casualtiesOverride), boatsSent: Math.floor(boatUnits / 30),
+        appliedEffects: [],
       });
     }
     if (outcomes.length) eventsByHour.set(h, outcomes);
@@ -428,5 +456,9 @@ export function simulate(plan) {
     dpTarget: plan.dpTarget || 0,
     targetShort: Math.max(0, (plan.dpTarget || 0) - oop.trainedModded),
   };
-  return { rows, final };
+  return {
+    ruleset: { ...RULESET, productionOverrides: { ...RULESET.productionOverrides } },
+    rows,
+    final,
+  };
 }

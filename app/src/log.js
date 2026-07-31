@@ -1,6 +1,6 @@
 // log.js — Export the current build as an OpenDominion *protection import log* (.txt).
 //
-// The real game (round-50) can IMPORT a protection log and auto-execute the actions:
+// The real game can IMPORT a protection log and auto-execute the actions:
 //   ProtectionController::postImportLog → LogParserService::parseLog
 //                                       → AutomationService::processLog
 // So this generator is written to match that parser's grammar EXACTLY — the same
@@ -31,7 +31,7 @@
 // Display names follow the game's dominion_attr_sentence_from_array(…, simLog:true):
 // buildings & land are FORCE-PLURAL + Title Case; trained units are FORCE-SINGULAR +
 // Title Case; resources stay lowercase. (The round-45 sample log shows singular
-// "Forest"/"Mountain"; the LIVE round-50 helper pluralizes — "Forests"/"Mountains" —
+// "Forest"/"Mountain"; the live helper pluralizes — "Forests"/"Mountains" —
 // and the importer's rtrim('s') accepts both, so we follow the live game.)
 
 import { constructionCost } from "./editor.js";
@@ -85,7 +85,9 @@ export function buildLog(plan, trace, meta) {
   const home = (meta && meta.homeLand) || "plain";
   const unitName = (slot) => {
     if (slot === "spies") return "Spies";
+    if (slot === "assassins") return "Assassins";
     if (slot === "wizards") return "Wizards";
+    if (slot === "archmages") return "Archmages";
     const u = units.find((u) => u.slot === +slot);
     return u ? u.name : `Unit ${slot}`;
   };
@@ -256,12 +258,13 @@ function renderMerged(p, c, ctx) {
     }
     case "train": {
       if (!items.length) return null;
-      const tot = { platinum: 0, ore: 0, mana: 0, lumber: 0, gems: 0 };
-      let draft = 0;
+      const tot = {
+        platinum: 0, ore: 0, mana: 0, lumber: 0, gems: 0,
+        draftees: 0, spies: 0, wizards: 0,
+      };
       const list = items.map(([slot, n]) => {
         const t = (c.train || {})[slot] || {};
         for (const res in tot) tot[res] += (t[res] || 0) * n;
-        draft += n;
         return `${ig(n)} ${ctx.unitName(slot)}`;
       }).join(", ");
       // platinum + ore always shown (game shows "0 ore"); mana/lumber/gems only when a
@@ -271,7 +274,7 @@ function renderMerged(p, c, ctx) {
       if (tot.mana) cost += `, ${ig(tot.mana)} mana`;
       if (tot.lumber) cost += `, ${ig(tot.lumber)} lumber`;
       if (tot.gems) cost += `, ${ig(tot.gems)} gems`;
-      cost += `, ${ig(draft)} draftees, 0 spies, and 0 wizards`;
+      cost += `, ${ig(tot.draftees)} draftees, ${ig(tot.spies)} spies, and ${ig(tot.wizards)} wizards`;
       return `Training of ${list} begun at a cost of ${cost}.`;
     }
     case "release":

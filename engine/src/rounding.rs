@@ -1,4 +1,4 @@
-//! OpenDominion's custom rounding helpers (src/helpers.php @ round-50), replicated bit-for-bit.
+//! OpenDominion's custom rounding helpers (src/helpers.php), replicated bit-for-bit.
 //!
 //! PHP's `round()` rounds half away from zero, which matches Rust's `f64::round()`.
 //!   rfloor($x) = floor(round($x, 10))   // 10-decimal pre-round kills float noise

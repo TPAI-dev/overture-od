@@ -1,4 +1,4 @@
-//! Calculators ported from round-50 (PopulationCalculator, LandCalculator, ...).
+//! Calculators ported from the pinned live ruleset (PopulationCalculator, LandCalculator, ...).
 //! Race, tech, and self-spell terms are data-driven where they can affect
 //! protection-period play.
 
@@ -266,7 +266,7 @@ pub fn boat_capacity(s: &DominionState) -> i64 {
 }
 
 // ----------------------------------------------------------------------------
-// Unit perks (round-50 MilitaryCalculator + ProductionCalculator). Data-driven;
+// Unit perks (MilitaryCalculator + ProductionCalculator). Data-driven;
 // perk values are scalars (e.g. 0.5) or comma-strings ("type,ratio,max" /
 // "slot,numRequired,amount"). Only the perks that act DURING protection — defense
 // and resource production — are interpreted; combat/ops/invasion perks are inert
@@ -411,7 +411,7 @@ pub fn unit_offense_modified(s: &DominionState, slot: usize) -> f64 {
 
 fn unit_power_from_spell_perk(s: &DominionState, slot: usize, power_type: &str) -> f64 {
     // Special case from MilitaryCalculator::getUnitPowerFromSpellPerk:
-    // Demon Infernal Command gives slot 1 +0.5 offense while active.
+    // Demon Infernal Command applies its slot-1 offense adjustment while active.
     if s.race == "demon" && slot == 1 && power_type == "offense" {
         return spell_perk(s, "offense_unit1");
     }
@@ -550,6 +550,9 @@ pub fn pairing_offense_bonus(s: &DominionState) -> f64 {
 /// Race-driven hourly unit production (`summons_unit` unit perk). Produced units
 /// enter the normal 12-hour training queue, matching TickService::performRaceUnitProduction.
 pub fn summons_unit_production(s: &DominionState) -> Vec<(usize, i64)> {
+    if spell_perk(s, "disable_unit_summoning") > 0.0 {
+        return Vec::new();
+    }
     let mut out = Vec::new();
     for source_slot in 1..=4 {
         let Some(v) = unit_perk(s, source_slot, "summons_unit") else {
@@ -897,12 +900,13 @@ pub fn gem_production(s: &DominionState) -> i64 {
 
 pub fn tech_production(s: &DominionState) -> i64 {
     let schools = s.building_school as f64;
-    if schools <= 0.0 {
+    let spell_raw = total_land(s) as f64 * spell_perk(s, "tech_production_raw_per_acre");
+    if schools <= 0.0 && spell_raw == 0.0 {
         return 0;
     }
     let land = total_land(s) as f64;
     let pct = (schools / land).min(SCHOOL_MAX_LAND_RATIO);
-    let effective = schools.min((land * SCHOOL_MAX_LAND_RATIO).floor()) * (1.0 - pct);
+    let effective = schools.min((land * SCHOOL_MAX_LAND_RATIO).floor()) * (1.0 - pct) + spell_raw;
     rfloor(effective * (1.0 + race_perk(s, "tech_production") / 100.0))
 }
 
@@ -1068,7 +1072,12 @@ pub const TRAINING_RESOURCES: [&str; 5] = ["platinum", "ore", "mana", "lumber", 
 /// Resource names are bare engine resources (`platinum`, `ore`, ...); callers that
 /// work with wallet keys should prefix them with `resource_`.
 pub fn unit_training_costs(s: &DominionState, slot: usize) -> Vec<(&'static str, i64)> {
-    let m = specialist_elite_multiplier(s);
+    let elite_spell = if slot >= 3 {
+        spell_perk(s, "military_cost_elite") / 100.0
+    } else {
+        0.0
+    };
+    let m = specialist_elite_multiplier(s) + elite_spell;
     let mut costs = Vec::new();
     for res in TRAINING_RESOURCES {
         let base = unit_cost(s, slot, res);
@@ -1085,9 +1094,96 @@ pub fn unit_training_costs(s: &DominionState, slot: usize) -> Vec<(&'static str,
     costs
 }
 
-/// Spy/wizard training cost multiplier. TODO: confirm getSpyCostMultiplier; 1.0 at start.
-pub fn spy_cost_multiplier(_s: &DominionState) -> f64 {
-    1.0
+fn ops_cost_discount(s: &DominionState) -> f64 {
+    let martyrdom = spell_perk(s, "martyrdom");
+    if martyrdom == 0.0 {
+        0.0
+    } else {
+        (s.prestige as f64 / (martyrdom * 100.0)).min(0.5)
+    }
+}
+
+pub fn spy_cost_multiplier(s: &DominionState) -> f64 {
+    1.0 + tp(s, "spy_cost") / 100.0 + spell_perk(s, "spy_cost") / 100.0 - ops_cost_discount(s)
+}
+
+pub fn wizard_cost_multiplier(s: &DominionState) -> f64 {
+    1.0 + tp(s, "wizard_cost") / 100.0 + spell_perk(s, "wizard_cost") / 100.0 - ops_cost_discount(s)
+}
+
+pub fn assassin_cost_multiplier(s: &DominionState) -> f64 {
+    1.0 + tp(s, "assassin_cost") / 100.0 - ops_cost_discount(s)
+}
+
+pub fn archmage_cost_multiplier(s: &DominionState) -> f64 {
+    1.0 + tp(s, "archmage_cost") / 100.0 - ops_cost_discount(s)
+}
+
+/// Exact per-unit training inputs and queue delay. Common covert/magic units
+/// consume their source unit explicitly, allowing Arcane Infusion to switch
+/// Archmages from Wizards to Draftees without duplicating the rule in callers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TrainingCosts {
+    pub resources: Vec<(&'static str, i64)>,
+    pub draftees: i64,
+    pub spies: i64,
+    pub wizards: i64,
+    pub hours: i64,
+}
+
+pub fn training_costs_for(s: &DominionState, unit: &str) -> Option<TrainingCosts> {
+    if let Some(slot) = unit
+        .strip_prefix("unit")
+        .and_then(|n| n.parse::<usize>().ok())
+    {
+        if !(1..=4).contains(&slot) || !unit_trainable(s, slot) {
+            return None;
+        }
+        return Some(TrainingCosts {
+            resources: unit_training_costs(s, slot),
+            draftees: 1,
+            spies: 0,
+            wizards: 0,
+            hours: if slot <= 2 {
+                crate::config::TRAIN_DELAY_SPECIALIST
+            } else {
+                crate::config::TRAIN_DELAY_DEFAULT
+            },
+        });
+    }
+
+    let arcane_archmages = spell_perk(s, "train_archmages_from_draftees");
+    let (platinum, draftees, spies, wizards) = match unit {
+        "spies" => (rceil(500.0 * spy_cost_multiplier(s)), 1, 0, 0),
+        "assassins" => (
+            rceil((1000.0 + race_perk(s, "assassin_cost")) * assassin_cost_multiplier(s)),
+            0,
+            1,
+            0,
+        ),
+        "wizards" => (rceil(500.0 * wizard_cost_multiplier(s)), 1, 0, 0),
+        "archmages" => {
+            let base = if arcane_archmages != 0.0 {
+                arcane_archmages
+            } else {
+                1000.0 + race_perk(s, "archmage_cost")
+            };
+            (
+                rceil(base * archmage_cost_multiplier(s)),
+                if arcane_archmages != 0.0 { 1 } else { 0 },
+                0,
+                if arcane_archmages == 0.0 { 1 } else { 0 },
+            )
+        }
+        _ => return None,
+    };
+    Some(TrainingCosts {
+        resources: vec![("platinum", platinum)],
+        draftees,
+        spies,
+        wizards,
+        hours: crate::config::TRAIN_DELAY_DEFAULT,
+    })
 }
 
 // Starvation (CasualtiesCalculator::getStarvationCasualtiesByUnitType): when

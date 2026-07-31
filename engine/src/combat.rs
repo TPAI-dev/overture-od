@@ -1,4 +1,4 @@
-//! Post-protection combat calculators — faithful ports of round-50
+//! Post-protection combat calculators — faithful ports of the pinned ruleset's
 //! MilitaryCalculator / RangeCalculator. Pure functions over `DominionState` (and a
 //! second land value for range). NOT used by the protection sim; this is the
 //! attacker/full-round layer, validated against the oracle's golden vectors.
@@ -415,11 +415,26 @@ pub fn overpopulation_excess(s: &DominionState) -> i64 {
 
 /// Units the attacker CONVERTS from the breaking force on a successful hit
 /// (InvadeActionService::handleConversions) — returns [→u1,→u2,→u3,→u4] gained. Base
-/// case: no conversion-rate spell perks, no upgrade_casualties. Faithful to round-50's
+/// case: no conversion-rate spell perks, no upgrade_casualties. Faithful to the game's
 /// hardcoded conversion-race list (note: spirit has the perk but does NOT convert).
 pub fn conversions(attacker: &DominionState, target: &DominionState, units: [i64; 4]) -> [i64; 4] {
+    let op = offensive_power_combat(attacker, target);
+    let dp = defensive_power_with_temples(target, attacker);
+    conversions_given(attacker, target, units, op, dp)
+}
+
+/// `conversions` with OP and DP supplied by the caller. Also wires the slot-3
+/// Werewolf conversion enabled by Feral Hunger and the live conversion-rate
+/// spell multiplier.
+pub fn conversions_given(
+    attacker: &DominionState,
+    target: &DominionState,
+    units: [i64; 4],
+    op: f64,
+    dp: f64,
+) -> [i64; 4] {
     let mut converted = [0i64; 4];
-    if !invasion_successful(attacker, target) {
+    if op <= dp {
         return converted;
     }
     if !matches!(
@@ -430,9 +445,14 @@ pub fn conversions(attacker: &DominionState, target: &DominionState, units: [i64
     }
     let land_ratio =
         (calc::total_land(target) as f64 / calc::total_land(attacker).max(1) as f64).min(1.0);
-    let conv_mult = 1.0; // + conversion_rate spell perks (0 base)
+    // Round 51 makes conversion-rate bonuses fair-range only.
+    let conv_mult = if land_ratio >= 0.75 {
+        1.0 + calc::spell_perk(attacker, "conversion_rate") / 100.0
+    } else {
+        1.0
+    };
     let off_mod = calc::offensive_power_multiplier(attacker); // getOffensivePowerMultiplier (no morale)
-    let mut target_dp = defensive_power_with_temples(target, attacker);
+    let mut target_dp = dp;
 
     // (sentSlot, convertIntoSlot, base_offense_power, conversionRate), highest rate first.
     let mut converters: Vec<(usize, usize, f64, f64)> = Vec::new();
@@ -459,6 +479,16 @@ pub fn conversions(attacker: &DominionState, target: &DominionState, units: [i64
             ));
         }
     }
+    // Feral Hunger: sent Werewolves convert into Werewolves while the spell is active.
+    let convert_werewolves = calc::spell_perk(attacker, "convert_werewolves");
+    if convert_werewolves > 0.0 && units[2] > 0 {
+        converters.push((
+            3,
+            3,
+            calc::unit_offense(attacker, 3),
+            1.0 / convert_werewolves,
+        ));
+    }
     converters.sort_by(|a, b| b.3.partial_cmp(&a.3).unwrap_or(std::cmp::Ordering::Equal));
 
     for (slot, convert_slot, power, rate) in converters {
@@ -475,6 +505,72 @@ pub fn conversions(attacker: &DominionState, target: &DominionState, units: [i64
         converted[convert_slot - 1] += crate::rounding::rfloor(converts);
     }
     converted
+}
+
+/// Apply self-effects triggered by a completed successful invasion. Round 51
+/// Feast of Blood applies Satiated Thirst for 48 hours at 75%+ range.
+pub fn apply_post_invasion_self_effects(
+    attacker: &mut DominionState,
+    success: bool,
+    range_pct: f64,
+) -> Vec<String> {
+    if !success || range_pct < 75.0 || calc::spell_perk(attacker, "apply_satiated_thirst") == 0.0 {
+        return Vec::new();
+    }
+
+    let key = "satiated_thirst";
+    let duration = crate::data::spell_duration(key);
+    if duration <= 0 {
+        return Vec::new();
+    }
+    if let Some(active) = attacker.spells.iter_mut().find(|spell| spell.key == key) {
+        active.duration = duration;
+    } else {
+        attacker.spells.push(crate::state::ActiveSpell {
+            key: key.to_string(),
+            duration,
+        });
+    }
+    vec![key.to_string()]
+}
+
+/// Survivors with `upgrade_survivors: "toSlot,pct"` return as the upgraded
+/// unit at 75%+ range. The result is a delta over the surviving army.
+pub fn conversion_upgrades(
+    attacker: &DominionState,
+    surviving: [i64; 4],
+    range_pct: f64,
+) -> [i64; 4] {
+    let mut delta = [0i64; 4];
+    if !matches!(
+        attacker.race.as_str(),
+        "lycanthrope" | "undead" | "vampire" | "dark-elf-rework" | "undead-rework"
+    ) || range_pct < 75.0
+    {
+        return delta;
+    }
+    for slot in 1..=4 {
+        if surviving[slot - 1] == 0 {
+            continue;
+        }
+        if let Some(serde_json::Value::String(spec)) =
+            calc::unit_perk(attacker, slot, "upgrade_survivors")
+        {
+            let p: Vec<&str> = spec.split(',').collect();
+            if p.len() < 2 {
+                continue;
+            }
+            let to_slot: usize = p[0].trim().parse().unwrap_or(0);
+            let pct: f64 = p[1].trim().parse().unwrap_or(0.0);
+            if to_slot < 1 || to_slot > 4 || pct == 0.0 {
+                continue;
+            }
+            let upgraded = crate::rounding::rfloor(surviving[slot - 1] as f64 * pct / 100.0);
+            delta[slot - 1] -= upgraded;
+            delta[to_slot - 1] += upgraded;
+        }
+    }
+    delta
 }
 
 // ----------------------------------------------------------------------------

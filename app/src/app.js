@@ -9,16 +9,17 @@ import { buildLog, downloadLog } from "./log.js";
 const LANDS = ["plain", "swamp", "hill", "mountain", "forest", "cavern", "water"];
 
 // Timeline horizon. Protection is hours 1..48; hour 49 is OUT OF PROTECTION (the headline);
-// hours 50.. are the optional post-OOP planning window (Phase 1: economy, no combat). The plan
+// hours 50.. are the optional post-OOP planning window. The plan
 // stores `hours` of length = protection + post-OOP. BY DEFAULT there's NO post-OOP window
 // (DEFAULT_POST_OOP_HOURS = 0) — the timeline runs through hour 49 (49 ticks incl. OOP) and stops;
 // the OOP row always shows because the adapter surfaces the OOP state whether or not a post-OOP
 // window exists. The topbar `#postOopInput` is opt-in "extend up to X", from 0 to MAX_POST_OOP_HOURS
-// (480 ≈ 20 days). The engine has no limit — nothing in calc/tick reads protection_ticks_remaining
+// (480 ≈ 20 days). Explicit invasions/prestige changes live in `plan.events`; event return queues
+// automatically extend the replay far enough to show their arrivals. Nothing in calc/tick reads protection_ticks_remaining
 // (which marches negative post-OOP), the daily-bonus reset keeps firing every 24h via
-// `remaining % 24 == 0`, and the spine/charts/ledger are data-driven off rows.length. Caveat:
-// post-OOP is economy-only (no combat) and NOT oracle-golden-validated, so a long window is a
-// "farm uninterrupted" projection — fine for buildup setup, rough far out.
+// `remaining % 24 == 0`, and the spine/charts/ledger are data-driven off rows.length. Ordinary
+// post-OOP economy remains a deterministic continuation; explicit scenario events add the modeled
+// invasion/prestige mutations without changing protection behavior.
 const PROTECTION_HOURS = 48;
 const OOP_HOUR = PROTECTION_HOURS + 1; // 49 — the out-of-protection moment
 const MAX_POST_OOP_HOURS = 480;        // topbar cap: extend up to 480h (~20 days) past OOP
@@ -30,10 +31,11 @@ const col = {
   land: "#cf8a63", peasant: "#b7b0a0", draftee: "#6aa8d8", plat: "#d9b25a",
   food: "#7ec27a", lumber: "#b88a5e", ore: "#c2705a", mana: "#7e86d6",
   gems: "#c77ec2", dp: "#d8d2c2", op: "#d6856a", dim: "#9aa0ab",
+  prestige: "#e2c16f",
 };
 
 const COLUMNS = [
-  // land shows on-hand land, with the committed total (incl. incoming exploration) in
+  // land shows on-hand land, with the committed total (incl. incoming exploration/invasions) in
   // parens when something's inbound, e.g. "500 (550)".
   {
     key: "land", label: "land", c: col.land, get: (r) => r.land + (r.incoming || 0),
@@ -50,6 +52,7 @@ const COLUMNS = [
   { key: "ore", label: "ore", c: col.ore, get: (r) => r.ore },
   { key: "mana", label: "mana", c: col.mana, get: (r) => r.mana },
   { key: "gems", label: "gems", c: col.gems, get: (r) => r.gems },
+  { key: "prestige", label: "prest", c: col.prestige, dim: true, get: (r) => r.prestige || 0 },
   { key: "research", label: "rsch", c: col.dim, dim: true, get: (r) => r.tech || 0 },
   // trained DP (draftees excluded), shown both as raw and after the global modifier
   // (guard towers / walls / Ares / morale). They coincide when no modifier is active.
@@ -63,7 +66,7 @@ const COLUMNS = [
    plain acres, nothing built, no actions queued. Open `00 OPENING` to place your free
    starting build, then design hour by hour (every edit re-simulates live). ───────── */
 function defaultPlan() {
-  return { race: "human", dpTarget: 6000, opening: {}, hours: Array.from({ length: DEFAULT_HOURS }, () => []), oopActions: [] };
+  return { race: "human", dpTarget: 6000, opening: {}, hours: Array.from({ length: DEFAULT_HOURS }, () => []), oopActions: [], events: [] };
 }
 
 /* ───────── state ───────── */
@@ -120,6 +123,7 @@ async function restoreFromHistory() {
   if (!Array.isArray(plan.hours)) plan.hours = [];
   plan.opening = plan.opening || {};
   if (!Array.isArray(plan.oopActions)) plan.oopActions = [];
+  if (!Array.isArray(plan.events)) plan.events = [];
   $("#raceSelect").value = plan.race;
   $("#dpInput").value = plan.dpTarget;
   $("#postOopInput").value = Math.max(0, plan.hours.length - PROTECTION_HOURS);
@@ -185,7 +189,13 @@ async function init() {
   document.querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () => switchTab(t.dataset.tab)));
 
   await loadMeta(plan.race);
-  editor = createEditor({ getPlan: () => plan, getTrace: () => trace, getMeta: () => meta, recompute, recordUndo, onNav: (h) => setPlayhead(h) });
+  editor = createEditor({
+    getPlan: () => plan, getTrace: () => trace, getMeta: () => meta,
+    recompute, previewEvent: (event) => engine.previewEvent(plan, event),
+    invasionLandGain: (attackerLand, targetLand) => engine.invasionLandGain(attackerLand, targetLand),
+    recordUndo,
+    onNav: (h) => setPlayhead(h),
+  });
   createSaves({
     getPlan: () => plan,
     applyPlan,
@@ -209,7 +219,7 @@ async function init() {
     }
     clearTimeout(resetTimer); disarmReset();
     editor.close();
-    applyPlan({ race: plan.race, dpTarget: plan.dpTarget, opening: {}, hours: Array.from({ length: DEFAULT_HOURS }, () => []), oopActions: [] });
+    applyPlan({ race: plan.race, dpTarget: plan.dpTarget, opening: {}, hours: Array.from({ length: DEFAULT_HOURS }, () => []), oopActions: [], events: [] });
   });
 
   // ⇩ log → export an importable protection log (.txt). The game's protection import
@@ -311,7 +321,7 @@ async function recompute(editHour = null) {
 let autosaveTimer = null;
 function planHasContent() {
   if (plan.opening && Object.values(plan.opening).some((n) => (n || 0) > 0)) return true;
-  return (plan.hours || []).some((h) => h && h.length);
+  return (plan.hours || []).some((h) => h && h.length) || (plan.events || []).length > 0;
 }
 function autosaveSoon() {
   if (!engine.live || !planHasContent()) return;
@@ -337,6 +347,7 @@ async function applyPlan(p, opts = {}) {
   while (plan.hours.length < DEFAULT_HOURS) plan.hours.push([]); // extend to the post-OOP horizon
   plan.opening = plan.opening || {};
   if (!Array.isArray(plan.oopActions)) plan.oopActions = [];
+  if (!Array.isArray(plan.events)) plan.events = [];
   $("#raceSelect").value = plan.race;
   $("#dpInput").value = plan.dpTarget;
   $("#postOopInput").value = Math.max(0, plan.hours.length - PROTECTION_HOURS);
@@ -452,8 +463,14 @@ function clearSimError() {
 function markers() {
   const m = [];
   // self-spells now render as duration bars in the spine's spell band (see spine.js), not point flags.
-  const exp = trace.rows.find((r) => r.incoming > 0); if (exp) m.push({ hour: exp.hour, label: "explore", color: "#6aa8d8" });
+  const exp = trace.rows.find((r) => (r.actions || []).some((action) => action.type === "explore"));
+  if (exp) m.push({ hour: exp.hour, label: "explore", color: "#6aa8d8" });
   const def = trace.rows.find((r) => r.military.u2 + r.military.u3 > 0); if (def) m.push({ hour: def.hour, label: "defense", color: "#d8d2c2" });
+  for (const row of trace.rows.filter((r) => (r.events || []).length)) {
+    const invasions = row.events.filter((event) => event.type === "invasion").length;
+    const prestige = row.events.filter((event) => event.type === "prestige").length;
+    m.push({ hour: row.hour, label: invasions ? "invasion" : (prestige ? "prestige" : "event"), color: invasions ? col.op : col.prestige });
+  }
   // OUT OF PROTECTION — hour 49, the headline. `oop: true` makes the spine render it as a
   // bold, unmistakable divider (not a small flag).
   m.push({ hour: OOP_HOUR, label: trace.final.feasible ? "OOP ✓" : "OOP", color: trace.final.feasible ? "#5fd08a" : "#e3a93f", oop: true });
@@ -489,7 +506,7 @@ function renderLedger(editHour = null) {
       html += `<tr class="ledger-oop-sep" aria-hidden="true"><td colspan="${cols.length + 1}"><span>◆ OUT OF PROTECTION · hour 49 ◆</span></td></tr>`;
     }
     const day = r.hour > 0 && r.hour % 24 === 0;
-    const hasAct = (r.actions || []).length > 0;
+    const hasAct = (r.actions || []).length > 0 || (r.events || []).length > 0;
     const reason = badReason.get(r.hour);    // overspend reason for this hour, if any
     const bad = reason != null;
     const warnMsg = reason ? String(reason).replace(/"/g, "&quot;") : ""; // custom-tooltip text (reason is self-describing)
@@ -500,7 +517,8 @@ function renderLedger(editHour = null) {
     const claimP = (r.actions || []).some((a) => a.type === "claim_platinum");
     const claimMarks = `${claimL ? `<span class="k-claim k-claim-l" title="claims +20 land this hour">L</span>` : ""}${claimP ? `<span class="k-claim k-claim-p" title="claims the platinum bonus this hour">P</span>` : ""}`;
     html += `<tr data-h="${r.hour}" class="${day ? "is-day" : ""} ${r.hour === playhead ? "is-active" : ""} ${bad ? "is-infeas" : ""} ${r.hour === 0 ? "is-opening" : ""} ${postoop ? "is-postoop" : ""} ${oop ? "is-oop" : ""}">`;
-    html += `<td class="k-hour ${hasAct ? "has-action" : ""}"><span class="k-hour-n">${String(r.hour).padStart(2, "0")}</span>${claimMarks}${reason ? `<span class="k-warn" tabindex="0" role="img" aria-label="${warnMsg}" data-warn="${warnMsg}">⚠</span>` : ""}</td>`;
+    const eventMark = (r.events || []).length ? `<span class="k-event" title="${r.events.length} scenario event${r.events.length === 1 ? "" : "s"}">◆</span>` : "";
+    html += `<td class="k-hour ${hasAct ? "has-action" : ""}"><span class="k-hour-n">${String(r.hour).padStart(2, "0")}</span>${claimMarks}${eventMark}${reason ? `<span class="k-warn" tabindex="0" role="img" aria-label="${warnMsg}" data-warn="${warnMsg}">⚠</span>` : ""}</td>`;
     for (const c of cols) {
       const v = c.get(r);
       const neg = v < 0;
@@ -576,7 +594,12 @@ function stateBlock(r, isFinal) {
   // in red rather than clamped, so a flagged over-construction reads honestly.
   const barren = r.barren ?? 0;
   const barrenVal = barren < 0 ? `<span style="color:var(--red)">${int(barren)}</span>` : int(barren);
-  html += group("land", [["committed", land], ["barren", barrenVal], ...LANDS.filter((l) => r.landBy[l]).map((l) => [l, int(r.landBy[l]), true])]);
+  const incomingTypes = r.incomingByType || {};
+  html += group("land", [
+    ["committed", land], ["barren", barrenVal],
+    ...((r.discountedLand || 0) > 0 ? [["discounted build acres", int(r.discountedLand), true]] : []),
+    ...LANDS.filter((l) => r.landBy[l] || incomingTypes[l]).map((l) => [l, `${int(r.landBy[l] || 0)}${incomingTypes[l] ? ` <span class="dim">(+${int(incomingTypes[l])})</span>` : ""}`, true]),
+  ]);
   html += group("defense (trained — draftees excluded)", [
     ["raw", int(r.trainedRaw)], ["modded", int(r.trainedModded)], ["multiplier", "×" + r.mult.toFixed(3), true],
   ]);
@@ -586,7 +609,17 @@ function stateBlock(r, isFinal) {
   html += `<div class="stat-group"><h3>buildings</h3><div class="chip-row">${bchips || '<span class="empty">none</span>'}</div></div>`;
   html += capsBlock(r);
   html += militaryBlock(r);
-  html += group("population", [["peasants", int(r.peasants)], ["max-pop", int(r.maxPop), true], ["morale", int(r.morale), true]]);
+  const away = r.away || { total: 0, returns: [] };
+  html += group("population", [
+    ["total", `${int(r.population || ((r.peasants || 0) + (r.populationMilitary || 0)))} <span class="dim">/ ${int(r.maxPop)}</span>`],
+    ["free space", int(Math.max(0, (r.maxPop || 0) - (r.population || 0))), true],
+    ["peasants", int(r.peasants)], ["military", int(r.populationMilitary || 0), true],
+    ["morale", int(r.morale), true], ["prestige", int(r.prestige || 0), true],
+  ]);
+  if (away.total > 0) {
+    const returnText = (away.returns || []).map((q) => `${int(q.amount)} ${((meta.units || []).find((u) => u.slot === q.slot) || {}).name || `slot ${q.slot}`} · ${q.hours}h`).join("<br>");
+    html += group("army away", [["total", int(away.total)], ["returns", returnText, true]]);
+  }
   html += employmentBlock(r);
   html += group("production / hr", [
     ["platinum", int(r.platPerHr)], ["food net", int(r.foodNet)],
@@ -600,9 +633,13 @@ function stateBlock(r, isFinal) {
     ...(showResource("ore") ? [["ore", int(r.ore)]] : []),
     ["mana", int(r.mana)], ["gems", int(r.gems)],
     ["research", int(r.tech || 0)],
+    ["prestige", int(r.prestige || 0), true],
     ...((r.boats || 0) > 0 ? [["boats", int(r.boats), true]] : []),
   ]);
   if (r.spells.length) html += `<div class="stat-group"><h3>active spells</h3><div class="spellbar">${r.spells.map((s) => `<span class="spell"><span class="dot" style="background:${col.mana}"></span>${s.key.replace("_", " ")} ${s.dur}h</span>`).join("")}</div></div>`;
+  if ((r.events || []).length) html += `<div class="stat-group"><h3>scenario events</h3><div class="event-readout">${r.events.map((event) => event.type === "invasion"
+    ? `<div><b>invasion</b> · ${int(event.landTotal)} acres · ${int((event.casualties || []).reduce((a, n) => a + n, 0))} casualties${event.landReturnHour ? ` · land H${event.landReturnHour}` : ""}</div>`
+    : `<div><b>prestige</b> · ${event.prestige >= 0 ? "+" : ""}${int(event.prestige)}</div>`).join("")}</div></div>`;
   return html;
 }
 function renderState() { $("#paneState").innerHTML = stateBlock(trace.rows[playhead], false); }

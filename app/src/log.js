@@ -33,6 +33,8 @@
 // Title Case; resources stay lowercase. (The round-45 sample log shows singular
 // "Forest"/"Mountain"; the LIVE round-50 helper pluralizes — "Forests"/"Mountains" —
 // and the importer's rtrim('s') accepts both, so we follow the live game.)
+
+import { constructionCost } from "./editor.js";
 //
 // Costs shown are bit-exact from the engine's per-hour cost table (desktop app); the
 // fields the parser ignores (bank "received", daily amounts, the training cost line)
@@ -150,6 +152,9 @@ export function buildLog(plan, trace, meta) {
   if (N > OOP_HOUR) {
     warnings.push("Hours 50+ are post-OOP planning — included for reference but ignored by the in-game protection import (it applies hours 1–49).");
   }
+  if ((plan.events || []).length) {
+    warnings.push(`${plan.events.length} scenario event${plan.events.length === 1 ? " is" : "s are"} saved in the OVERTURE build but excluded from the protection import log.`);
+  }
 
   return { text: out.join("\n") + "\n", warnings, hours: out.filter((l) => l.startsWith("======")).length };
 }
@@ -167,8 +172,18 @@ function renderHour(acts, entry, ctx) {
   const lines = [];
   let manaLeft = en.mana || 0; // self-spells are mana-gated (skipped if short)
   let claimedPlat = !!en.dailyPlatinum, claimedLand = !!en.dailyLand;
+  let discountedLand = en.discountedLand ?? entry.discountedLand ?? 0;
   let pend = null;
-  const flush = () => { if (pend) { const l = renderMerged(pend, c, ctx); if (l) lines.push(l); pend = null; } };
+  const flush = () => {
+    if (!pend) return;
+    const l = renderMerged(pend, c, { ...ctx, discountedLand });
+    if (l) lines.push(l);
+    if (pend.type === "construct") {
+      const built = [...pend.items.values()].reduce((sum, amount) => sum + amount, 0);
+      discountedLand = Math.max(0, discountedLand - built);
+    }
+    pend = null;
+  };
 
   for (const a of acts) {
     if (MERGE.has(a.type)) {
@@ -226,7 +241,9 @@ function renderMerged(p, c, ctx) {
       if (!items.length) return null;
       const total = items.reduce((s, [, n]) => s + n, 0);
       const list = items.map(([k, n]) => `${ig(n)} ${bldName(k)}`).join(", ");
-      return `Construction of ${list} started at a cost of ${ig(total * c.constructPlat)} platinum and ${ig(total * c.constructLumber)} lumber.`;
+      const platinum = constructionCost(c, ctx.discountedLand, total, "platinum");
+      const lumber = constructionCost(c, ctx.discountedLand, total, "lumber");
+      return `Construction of ${list} started at a cost of ${ig(platinum)} platinum and ${ig(lumber)} lumber.`;
     }
     case "destroy":
       if (!items.length) return null;

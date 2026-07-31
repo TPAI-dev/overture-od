@@ -12,6 +12,7 @@ use crate::calc;
 use crate::config;
 use crate::data;
 use crate::rounding::rceil;
+use crate::scenario_event::{self, ScenarioEvent};
 use crate::state::{DominionState, QueueEntry};
 
 #[derive(Deserialize, Debug, Default, Clone)]
@@ -25,8 +26,8 @@ pub struct Scenario {
     pub ticks: Vec<Vec<Value>>,
     #[serde(rename = "oopActions", default)]
     pub oop_actions: Vec<Value>,
-    /// Post-OOP economic hours (49..N), each a list of actions, run with `post_oop_tick`
-    /// after the OOP boundary (Phase 1: economy only, no combat). Default-empty ⇒ every
+    /// Post-OOP hours (49..N), each a list of actions, run with `post_oop_tick`
+    /// after the OOP boundary. Explicit scenario events are supplied separately. Default-empty ⇒ every
     /// existing caller (app / feasibility / golden JSON) is byte-identical.
     #[serde(rename = "postOopTicks", default)]
     pub post_oop_ticks: Vec<Vec<Value>>,
@@ -38,8 +39,25 @@ pub fn start_state(sc: &Scenario) -> DominionState {
     config::start_state(&sc.protection_type, sc.days_late, &sc.race)
 }
 
+/// Current round day for an OVERTURE hour. Hour 1 starts day 1, with the daily
+/// boundary repeating at hours 25, 49, 73, and so on. A late start shifts that
+/// clock by the number of completed round days used for its starting resources.
+pub fn round_day_for_hour(days_late: i64, hour: i64) -> i64 {
+    days_late.max(0) + 1 + (hour.max(1) - 1) / 24
+}
+
 /// Run a scenario, returning one snapshot per oracle step.
 pub fn run(sc: &Scenario) -> Vec<DominionState> {
+    run_with_events(sc, &[]).expect("empty scenario event replay cannot fail")
+}
+
+/// Checked scenario-event replay used by OVERTURE. Events are passed beside the
+/// long-standing Scenario type so existing protection callers remain compatible.
+pub fn run_with_events(
+    sc: &Scenario,
+    events: &[ScenarioEvent],
+) -> Result<Vec<DominionState>, String> {
+    scenario_event::validate_events(events)?;
     let mut s = start_state(sc);
     let mut steps = Vec::new();
 
@@ -54,9 +72,10 @@ pub fn run(sc: &Scenario) -> Vec<DominionState> {
     }
     steps.push(s.clone()); // "building_phase_done"
 
-    for actions in &sc.ticks {
+    for (index, actions) in sc.ticks.iter().enumerate() {
+        let round_day = round_day_for_hour(sc.days_late, index as i64 + 1);
         for a in actions {
-            apply_action(&mut s, a);
+            apply_action_at_round_day(&mut s, a, round_day);
         }
         protection_tick(&mut s);
         steps.push(s.clone());
@@ -66,29 +85,33 @@ pub fn run(sc: &Scenario) -> Vec<DominionState> {
     // snapshot. This is the OOP headline / row-49 state. Pushed when there are OOP actions
     // OR a post-OOP window to follow; with no post-OOP window the condition reduces to the
     // old `!oop_actions.is_empty()`, so existing callers are byte-identical.
-    if !sc.oop_actions.is_empty() || !sc.post_oop_ticks.is_empty() {
+    if !sc.oop_actions.is_empty() || !sc.post_oop_ticks.is_empty() || !events.is_empty() {
         // Out of protection from here on. The oracle flips protection_finished at the final
         // protection tick (remaining→0) for advanced dominions; we set it at the boundary,
         // which is observationally identical (protection_finished is cast/display-only — never
         // a compared golden FIELD, and calc/tick never read it). This gates `invalid_protection`
         // racial spells: refused under protection, castable now (e.g. Undead Death and Decay).
         s.protection_finished = true;
+        let round_day = round_day_for_hour(sc.days_late, sc.ticks.len() as i64 + 1);
         for a in &sc.oop_actions {
-            apply_action(&mut s, a);
+            apply_action_at_round_day(&mut s, a, round_day);
         }
         steps.push(s.clone());
     }
 
-    // Post-OOP economic hours (49..N): the same per-hour economy as protection (no combat
-    // this phase), via `post_oop_tick`. Inert for every existing caller (default-empty).
-    for actions in &sc.post_oop_ticks {
+    // Post-OOP hours (49..N): the same per-hour economy as protection, with any explicit
+    // scenario events applied after actions and before `post_oop_tick`.
+    for (index, actions) in sc.post_oop_ticks.iter().enumerate() {
+        let hour = scenario_event::FIRST_EVENT_HOUR + index as i64;
+        let round_day = round_day_for_hour(sc.days_late, hour);
         for a in actions {
-            apply_action(&mut s, a);
+            apply_action_at_round_day(&mut s, a, round_day);
         }
+        scenario_event::apply_events_for_hour(&mut s, events, hour)?;
         post_oop_tick(&mut s);
         steps.push(s.clone());
     }
-    steps
+    Ok(steps)
 }
 
 // ---------------------------------------------------------------------------
@@ -189,18 +212,53 @@ pub fn scenario_value_from_overture_plan(plan_in: &Value) -> Value {
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    let all_hours: Vec<Value> = hours
+    let mut all_hours: Vec<Value> = hours
         .iter()
         .map(|hour| {
             let acts = hour.as_array().cloned().unwrap_or_default();
-            Value::Array(acts.iter().map(|a| reshape_overture_action(a, &home)).collect())
+            Value::Array(
+                acts.iter()
+                    .map(|a| reshape_overture_action(a, &home))
+                    .collect(),
+            )
         })
         .collect();
+    let events = plan_in
+        .get("events")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    // A hit at hour H with a 12h land return needs ticks through H+11 so the
+    // trace includes the arrival row at H+12. Imported plans need not pre-pad
+    // their action array; inert hours are added only in this adapter.
+    let required_hours = events
+        .iter()
+        .filter_map(|event| {
+            let hour = event.get("hour").and_then(Value::as_i64)?;
+            (scenario_event::FIRST_EVENT_HOUR..=scenario_event::MAX_EVENT_HOUR)
+                .contains(&hour)
+                .then_some((event, hour))
+        })
+        .map(|(event, hour)| {
+            let tail = if event.get("type").and_then(Value::as_str) == Some("invasion") {
+                scenario_event::LAND_RETURN_HOURS - 1
+            } else {
+                0
+            };
+            hour.saturating_add(tail) as usize
+        })
+        .max()
+        .unwrap_or(0);
+    while all_hours.len() < required_hours {
+        all_hours.push(Value::Array(Vec::new()));
+    }
     const PROTECTION_HOURS: usize = 48;
     let split = all_hours.len().min(PROTECTION_HOURS);
     let ticks: Vec<Value> = all_hours[..split].to_vec();
-    let post_oop_ticks: Vec<Value> =
-        all_hours.get(split..).map(<[_]>::to_vec).unwrap_or_default();
+    let post_oop_ticks: Vec<Value> = all_hours
+        .get(split..)
+        .map(<[_]>::to_vec)
+        .unwrap_or_default();
     let oop_actions: Vec<Value> = plan_in
         .get("oopActions")
         .or_else(|| plan_in.get("oop_actions"))
@@ -217,8 +275,22 @@ pub fn scenario_value_from_overture_plan(plan_in: &Value) -> Value {
         "ticks": Value::Array(ticks),
         "oopActions": Value::Array(oop_actions),
         "postOopTicks": Value::Array(post_oop_ticks),
+        "events": Value::Array(events),
         "daysLate": plan_in.get("daysLate").and_then(Value::as_i64).unwrap_or(0),
     })
+}
+
+/// Parse and validate the event stream stored beside an OVERTURE action plan.
+pub fn scenario_events_from_overture_plan(plan_in: &Value) -> Result<Vec<ScenarioEvent>, String> {
+    let events: Vec<ScenarioEvent> = serde_json::from_value(
+        plan_in
+            .get("events")
+            .cloned()
+            .unwrap_or_else(|| Value::Array(Vec::new())),
+    )
+    .map_err(|error| format!("scenario events are malformed: {error}"))?;
+    scenario_event::validate_events(&events)?;
+    Ok(events)
 }
 
 fn protection_tick(s: &mut DominionState) {
@@ -232,7 +304,7 @@ fn protection_tick(s: &mut DominionState) {
     *s = crate::tick::tick(s);
 }
 
-/// One post-protection hour (Phase 1: economy only, no combat). Mirrors `protection_tick`
+/// One post-protection hour. Mirrors `protection_tick`
 /// but for the post-OOP clock: the real game keeps resetting the daily plat/land bonus on
 /// the round-start wall-clock hour, which is the arithmetic continuation of the protection
 /// resets — protection lands them at game-hours 24 and 48 (`protection_ticks_remaining` 24
@@ -251,6 +323,12 @@ fn post_oop_tick(s: &mut DominionState) {
 }
 
 pub fn apply_action(s: &mut DominionState, a: &Value) {
+    apply_action_at_round_day(s, a, 1);
+}
+
+/// Apply one action with the simulated current round day available to mechanics
+/// whose live formulas read the round clock.
+pub fn apply_action_at_round_day(s: &mut DominionState, a: &Value, round_day: i64) {
     match a["type"].as_str().unwrap_or("") {
         "explore" => {
             let plat_per = calc::explore_platinum_cost(s);
@@ -274,8 +352,6 @@ pub fn apply_action(s: &mut DominionState, a: &Value) {
             s.morale -= drop.min(s.morale);
         }
         "construct" => {
-            let plat_per = calc::construct_platinum_cost(s);
-            let lumber_per = calc::construct_lumber_cost(s);
             let mut total = 0i64;
             if let Some(data) = a["data"].as_object() {
                 for (k, v) in data {
@@ -289,8 +365,9 @@ pub fn apply_action(s: &mut DominionState, a: &Value) {
                     });
                 }
             }
-            s.resource_platinum -= plat_per * total;
-            s.resource_lumber -= lumber_per * total;
+            s.resource_platinum -= calc::construct_platinum_total_cost(s, total, round_day);
+            s.resource_lumber -= calc::construct_lumber_total_cost(s, total, round_day);
+            s.discounted_land = (s.discounted_land - total).max(0);
         }
         "rezone" => {
             let plat_per = calc::rezone_platinum_cost(s);

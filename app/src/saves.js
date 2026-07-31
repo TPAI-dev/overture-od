@@ -1,7 +1,7 @@
 // saves.js — named build library. Persists to localStorage, which works in BOTH the
 // browser preview and the Tauri webview (separate stores; use export/import JSON to
 // move builds between them or back them up). A build = the whole plan object
-// {race, dpTarget, opening, hours, oopActions}.
+// {race, dpTarget, opening, hours, oopActions, events}.
 
 const KEY = "overture.builds.v1";
 const read = () => { try { return JSON.parse(localStorage.getItem(KEY)) || []; } catch { return []; } };
@@ -22,6 +22,7 @@ const isPlanShape = (p) =>
   Array.isArray(p.hours) && p.hours.every((h) => Array.isArray(h)) &&
   (p.race == null || typeof p.race === "string") &&
   (p.oopActions == null || Array.isArray(p.oopActions)) &&
+  (p.events == null || Array.isArray(p.events)) &&
   (p.opening == null || (typeof p.opening === "object" && !Array.isArray(p.opening)));
 
 export function createSaves(deps) {

@@ -165,16 +165,32 @@ pub fn prestige_penalty(
 }
 
 // ----------------------------------------------------------------------------
-// Casualties (InvadeActionService::handleOffensive/DefensiveCasualties). BASE CASE:
-// no fixed/immortal/conversion unit perks and no recent invasions (modifier = 1), so
-// the per-slot casualty multipliers are 1.0. `units` is the sent army [u1..u4].
+// Casualties (InvadeActionService::handleOffensive/DefensiveCasualties).
+// Unit perks plus active spell and researched-tech modifiers are modeled here.
+// OVERTURE scenario events intentionally exclude wonders and heroes.
 // ----------------------------------------------------------------------------
 
+/// Dominion-wide casualty multiplier from active spells and researched techs.
+/// This is the live calculator's `1 - min(0.8, reduction)` rule. Positive
+/// casualty perks are penalties; negative perks reduce losses.
+fn non_unit_casualty_multiplier(s: &DominionState, offensive: bool) -> f64 {
+    let direction = if offensive {
+        "casualties_offense"
+    } else {
+        "casualties_defense"
+    };
+    let perk_points = calc::spell_perk(s, "casualties")
+        + calc::spell_perk(s, direction)
+        + calc::tp(s, "casualties")
+        + calc::tp(s, direction);
+    let reduction = -perk_points / 100.0;
+    1.0 - reduction.min(0.8)
+}
+
 /// Per-slot casualty multiplier (CasualtiesCalculator::get{Offensive,Defensive}-
-/// CasualtiesMultiplierForUnitSlot), base engine: no spell/tech/wonder/hero terms, so
-/// the dominion-wide multiplier is 1.0. Handles immortal (→ 0), immortal_vs_land_range
-/// (offense only), the flat `casualties` / `casualties_{offense,defense}` reduction, and
-/// the `reduce_combat_losses` pairing addition. `units` = the sent army (offense path).
+/// CasualtiesMultiplierForUnitSlot). Handles active spell and tech modifiers,
+/// immortal (→ 0), immortal_vs_land_range (offense only), immortal_from_pairing,
+/// flat unit casualty perks, and reduce_combat_losses. `units` is the sent army.
 fn casualty_multiplier(
     s: &DominionState,
     slot: usize,
@@ -182,6 +198,12 @@ fn casualty_multiplier(
     units: &[i64; 4],
     offensive: bool,
 ) -> f64 {
+    // `cancels_immortal` is the live calculator's first spell gate: it restores
+    // the unmodified multiplier and cancels every unit/non-unit reduction,
+    // including immortality.
+    if calc::spell_perk(s, "cancels_immortal") != 0.0 {
+        return 1.0;
+    }
     if calc::unit_perk_scalar(s, slot, "immortal") != 0.0 {
         return 0.0;
     }
@@ -206,7 +228,37 @@ fn casualty_multiplier(
             calc::unit_perk_scalar(s, slot, dir)
         }
     };
-    let mut unit_bonus = -cas / 100.0;
+    let mut unit_bonus = 0.0;
+    // Each paired defensive unit can make one sent unit immortal. When the paired
+    // slot has zero offense, PHP draws the pairing count from troops at home;
+    // otherwise it uses the paired slot's sent count.
+    if offensive {
+        if let Some(spec) = calc::unit_perk(s, slot, "immortal_from_pairing") {
+            let parts = spec
+                .as_str()
+                .map(|value| value.split(',').collect::<Vec<_>>());
+            if let Some(parts) = parts {
+                if parts.len() >= 2 && units[slot - 1] > 0 {
+                    let paired_slot = parts[0].trim().parse::<usize>().unwrap_or(0);
+                    let number_required = parts[1].trim().parse::<i64>().unwrap_or(0);
+                    if (1..=4).contains(&paired_slot) && number_required > 0 {
+                        let paired_count = if calc::unit_offense(s, paired_slot) == 0.0 {
+                            calc::military_slot_count(s, paired_slot)
+                        } else {
+                            units[paired_slot - 1]
+                        };
+                        unit_bonus += ((paired_count as f64 / number_required as f64)
+                            / units[slot - 1] as f64)
+                            .min(1.0);
+                    }
+                }
+            }
+        }
+    }
+    unit_bonus -= cas / 100.0;
+    if offensive && land_ratio >= 0.75 {
+        unit_bonus -= calc::unit_perk_scalar(s, slot, "casualties_offense_range") / 100.0;
+    }
     // reduce_combat_losses pairing (none in the active race set; faithful if added).
     if let Some(rcl) =
         (1..=4).find(|&sl| calc::unit_perk_scalar(s, sl, "reduce_combat_losses") != 0.0)
@@ -224,7 +276,7 @@ fn casualty_multiplier(
             unit_bonus += (cnt as f64 / total as f64) / 2.0;
         }
     }
-    1.0 * (1.0 - unit_bonus) // nonUnitBonusMultiplier (1.0) × unit-bonus factor
+    non_unit_casualty_multiplier(s, offensive) * (1.0 - unit_bonus)
 }
 
 /// Attacker units lost [u1..u4]. Base 8.5%; on a SUCCESS the killed count scales with the
@@ -241,8 +293,8 @@ pub fn offensive_casualties(
 }
 
 /// `offensive_casualties` with OP and DP supplied by the caller. Same per-slot multiplier
-/// path (immortal → 0, `immortal_vs_land_range`, `fixed_casualties` bypass, flat
-/// `casualties_*` reductions, `reduce_combat_losses`), reading `attacker`'s race/unit perks
+/// path (immortal → 0, `immortal_vs_land_range`, `fixed_casualties` bypass, spell/tech,
+/// pairing, flat `casualties_*` reductions, `reduce_combat_losses`), reading `attacker`'s race/unit perks
 /// — only the success flag and the needed-force share come from `op`/`dp`. For the intel
 /// layer, which knows the sent OP and the target's temple-adjusted DP from scouted
 /// multipliers it can't fold back into a full `DominionState`. `attacker` still needs its
@@ -423,6 +475,31 @@ pub fn conversions(attacker: &DominionState, target: &DominionState, units: [i64
         converted[convert_slot - 1] += crate::rounding::rfloor(converts);
     }
     converted
+}
+
+// ----------------------------------------------------------------------------
+// Return timing (InvasionService). OVERTURE does not model the Portals wonder,
+// so only each unit's data-driven `faster_return` perk applies.
+// ----------------------------------------------------------------------------
+
+/// Hours slot `slot`'s units take to return from a hit: 12 minus the unit perk.
+pub fn unit_return_hours(s: &DominionState, slot: usize) -> i64 {
+    12 - calc::unit_perk_scalar(s, slot, "faster_return") as i64
+}
+
+/// Slowest return among slots actually sent; defaults to 12 for an empty send.
+pub fn slowest_unit_return_hours(s: &DominionState, sent: [i64; 4]) -> i64 {
+    let slowest = (1..=4)
+        .filter(|slot| sent[*slot - 1] > 0)
+        .map(|slot| unit_return_hours(s, slot))
+        .max()
+        .unwrap_or(12);
+    slowest
+}
+
+/// Conquered/generated land always returns in 12 hours; unit perks do not alter it.
+pub fn resource_return_hours() -> i64 {
+    12
 }
 
 /// Morale the attacker loses for an invasion (InvadeActionService::handleMoraleChanges):

@@ -20,7 +20,7 @@ use tauri::Manager; // path resolver (app.path()) for the per-user storage dir
 
 use engine::rounding::{rceil, round_int};
 use engine::state::DominionState;
-use engine::{calc, config, data, plan};
+use engine::{calc, combat, config, data, plan, scenario_event};
 
 // ---------------------------------------------------------------------------
 // app plan  ->  engine Scenario
@@ -45,13 +45,54 @@ fn home_land_type(race: &str) -> String {
 // engine DominionState  ->  app row JSON
 // ---------------------------------------------------------------------------
 
-/// Land queued from exploration (the "incoming" acres not yet on-hand).
+/// Land queued from exploration or invasion (not yet on-hand).
 fn incoming_land(s: &DominionState) -> i64 {
     s.queue
         .iter()
-        .filter(|q| q.source == "exploration")
+        .filter(|q| {
+            (q.source == "exploration" || q.source == "invasion") && q.resource.starts_with("land_")
+        })
         .map(|q| q.amount)
         .sum()
+}
+
+fn incoming_land_by_type(s: &DominionState) -> Value {
+    let mut out = Map::new();
+    for land in LAND_TYPES {
+        let resource = format!("land_{land}");
+        let amount = s
+            .queue
+            .iter()
+            .filter(|q| {
+                (q.source == "exploration" || q.source == "invasion") && q.resource == resource
+            })
+            .map(|q| q.amount)
+            .sum::<i64>();
+        out.insert(land.to_string(), json!(amount));
+    }
+    Value::Object(out)
+}
+
+fn away_json(s: &DominionState) -> Value {
+    let units = scenario_event::returning_invasion_units(s);
+    let returns = s
+        .queue
+        .iter()
+        .filter(|q| q.source == "invasion" && q.resource.starts_with("military_unit"))
+        .map(|q| {
+            let slot = q
+                .resource
+                .trim_start_matches("military_unit")
+                .parse::<i64>()
+                .unwrap_or(0);
+            json!({ "slot": slot, "hours": q.hours, "amount": q.amount })
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "u1": units[0], "u2": units[1], "u3": units[2], "u4": units[3],
+        "total": units.iter().sum::<i64>(),
+        "returns": returns,
+    })
 }
 
 /// Trained defensive power, DRAFTEES EXCLUDED (per spec: a race spell negates
@@ -194,7 +235,7 @@ fn free_land_by_type(s: &DominionState, off: &HashMap<String, i64>) -> Value {
 /// NEW action the editor prices off them is the next one in line, applied after everything
 /// already queued this hour, so Σ(count × unit_cost) ≤ the remaining wallet is exact even
 /// across a same-tick claim → rezone → build chain.
-fn costs_json(s: &DominionState) -> Value {
+fn costs_json(s: &DominionState, round_day: i64) -> Value {
     let land = s.total_land() as f64;
     // Per-unit training cost, data-driven for every race (mirrors plan.rs::unit_train_cost
     // + TrainingCalculator): every resource present in the race's unit data, scaled by the
@@ -217,6 +258,7 @@ fn costs_json(s: &DominionState) -> Value {
         "exploreDraftee": calc::explore_draftee_cost(s),
         "constructPlat": calc::construct_platinum_cost(s),
         "constructLumber": calc::construct_lumber_cost(s),
+        "constructDiscountMultiplier": calc::discounted_land_multiplier(round_day),
         "rezonePlat": calc::rezone_platinum_cost(s),
         "techCost": calc::tech_cost(s),
         "train": {
@@ -281,7 +323,13 @@ fn employment_json(s: &DominionState) -> Value {
 
 /// Map one engine state to the app's per-hour row (field names match `mock.js`,
 /// so the engine and the preview mock are interchangeable behind `bridge.js`).
-fn row_json(s: &DominionState, hour: i64, actions: Value, off: &HashMap<String, i64>) -> Value {
+fn row_json(
+    s: &DominionState,
+    hour: i64,
+    round_day: i64,
+    actions: Value,
+    off: &HashMap<String, i64>,
+) -> Value {
     let mult = calc::defensive_power_multiplier(s) * calc::morale_multiplier(s);
     let traw = trained_raw(s);
     // Offensive power (target-less base), symmetric with the trained-DP fields.
@@ -295,6 +343,7 @@ fn row_json(s: &DominionState, hour: i64, actions: Value, off: &HashMap<String, 
         .collect();
     json!({
         "hour": hour,
+        "roundDay": round_day,
         "rem": 48 - hour,
         "land": s.total_land(),
         "landBy": {
@@ -304,8 +353,11 @@ fn row_json(s: &DominionState, hour: i64, actions: Value, off: &HashMap<String, 
             "water": land_recon(s, "water", off),
         },
         "incoming": incoming_land(s),
+        "incomingByType": incoming_land_by_type(s),
         "peasants": s.peasants,
         "draftees": s.military_draftees,
+        "population": calc::population(s),
+        "populationMilitary": calc::population_military(s),
         "maxPop": calc::max_population(s),
         "employed": calc::population_employed(s),
         "jobs": calc::employment_jobs(s),
@@ -331,6 +383,8 @@ fn row_json(s: &DominionState, hour: i64, actions: Value, off: &HashMap<String, 
         "trainedOpModded": op_raw * op_mult,
         "opMult": op_mult,
         "morale": s.morale,
+        "prestige": s.prestige,
+        "discountedLand": s.discounted_land,
         "tech": s.resource_tech,
         "barren": calc::total_barren_land(s),
         "freeLandByType": free_land_by_type(s, off),
@@ -338,7 +392,7 @@ fn row_json(s: &DominionState, hour: i64, actions: Value, off: &HashMap<String, 
         "dailyLand": s.daily_land,
         "draftRate": s.draft_rate,
         "techs": s.techs.clone(),
-        "costs": costs_json(s),
+        "costs": costs_json(s, round_day),
         "caps": caps_json(s),
         "employment": employment_json(s),
         "buildings": buildings_json(s),
@@ -349,8 +403,14 @@ fn row_json(s: &DominionState, hour: i64, actions: Value, off: &HashMap<String, 
             "spies": s.military_spies, "assassins": s.military_assassins,
             "wizards": s.military_wizards, "archmages": s.military_archmages,
         },
+        "unitNeedsBoat": [
+            calc::unit_need_boat(s, 1), calc::unit_need_boat(s, 2),
+            calc::unit_need_boat(s, 3), calc::unit_need_boat(s, 4),
+        ],
+        "away": away_json(s),
         "spells": spells,
         "actions": actions,
+        "events": [],
     })
 }
 
@@ -373,6 +433,7 @@ fn simulate(plan: Value) -> Result<Value, String> {
     let scenario_v = plan::scenario_value_from_overture_plan(&plan);
     let sc: plan::Scenario =
         serde_json::from_value(scenario_v).map_err(|e| format!("scenario build failed: {e}"))?;
+    let events = plan::scenario_events_from_overture_plan(&plan)?;
 
     // Reject malformed opening builds at the import boundary: unknown building keys,
     // negative counts, or a total exceeding starting land (which would mint acres).
@@ -398,11 +459,11 @@ fn simulate(plan: Value) -> Result<Value, String> {
     // states[BASE + H-1] (hour 0 and hour 1 both enter from building_phase_done = states[BASE]).
     // At the OOP boundary the engine inserts ONE extra snapshot (post-protection + the OOP cast,
     // e.g. Ares) — the headline OOP state, shown as row P+1 (hour 49) — so rows at/after OOP carry
-    // a +1 offset (states[BASE + H]). Post-OOP hours (P+2..) are the economy continuing past OOP
-    // (Phase 1: no combat). The displayed ROW is then the entering state with hour H's INSTANT
+    // a +1 offset (states[BASE + H]). Post-OOP hours (P+2..) continue the economy and apply
+    // explicit scenario events after same-hour actions. The displayed ROW is then the entering state with hour H's INSTANT
     // actions replayed on top (A_H) — see the row loop below — so instant effects land in their
     // own tick; only production defers to row H+1.
-    let states = plan::run(&sc);
+    let states = plan::run_with_events(&sc, &events)?;
     if states.len() < 3 {
         return Err("engine produced too few states".into());
     }
@@ -414,7 +475,7 @@ fn simulate(plan: Value) -> Result<Value, String> {
     // the OOP state already exists as the last protection tick's result (entering hour P+1 =
     // states.last()). So: with has_oop we show every state past BASE (incl. the boundary snapshot
     // + post-OOP rows); without it we extend exactly one row past protection to that OOP state.
-    let has_oop = !sc.oop_actions.is_empty() || !sc.post_oop_ticks.is_empty();
+    let has_oop = !sc.oop_actions.is_empty() || !sc.post_oop_ticks.is_empty() || !events.is_empty();
     let last_hour = if has_oop {
         states.len().saturating_sub(BASE + 1)
     } else {
@@ -439,6 +500,7 @@ fn simulate(plan: Value) -> Result<Value, String> {
 
     let mut rows = Vec::with_capacity(last_hour + 1);
     for h in 0..=last_hour {
+        let round_day = plan::round_day_for_hour(sc.days_late, h as i64);
         // Row H shows the dominion DURING hour H *after its instant actions* (A_H). states[idx]
         // is the entering wallet E_H (pre-action); we clone it and replay hour H's actions
         // through the engine's own apply_action, so the row reflects this tick's INSTANT effects
@@ -465,8 +527,13 @@ fn simulate(plan: Value) -> Result<Value, String> {
                 .unwrap_or(&[])
         };
         for a in acts_h {
-            plan::apply_action(&mut disp, a);
+            plan::apply_action_at_round_day(&mut disp, a, round_day);
         }
+        let event_outcomes = if h as i64 >= scenario_event::FIRST_EVENT_HOUR {
+            scenario_event::apply_events_for_hour(&mut disp, &events, h as i64)?
+        } else {
+            Vec::new()
+        };
         // app-shaped actions ride on the row they're taken from (the queued-action display); none
         // beyond the planned hours (e.g. the trailing post-OOP end row).
         let actions = if h >= 1 {
@@ -474,7 +541,7 @@ fn simulate(plan: Value) -> Result<Value, String> {
         } else {
             json!([])
         };
-        let mut row = row_json(&disp, h as i64, actions, &off);
+        let mut row = row_json(&disp, h as i64, round_day, actions, &off);
         // The log exporter re-derives each hour's actions from the ENTERING wallet (E_H) — it
         // gates self-spells on the entering mana and skips already-claimed dailies — so it needs
         // the pre-action mana / daily-claim flags / peasants that the A_H display state no longer
@@ -482,12 +549,18 @@ fn simulate(plan: Value) -> Result<Value, String> {
         // the A_H row directly.
         if let Some(obj) = row.as_object_mut() {
             obj.insert(
+                "events".into(),
+                serde_json::to_value(event_outcomes)
+                    .map_err(|e| format!("event outcome serialization failed: {e}"))?,
+            );
+            obj.insert(
                 "enter".into(),
                 json!({
                     "mana": entering.resource_mana,
                     "dailyPlatinum": entering.daily_platinum,
                     "dailyLand": entering.daily_land,
                     "peasants": entering.peasants,
+                    "discountedLand": entering.discounted_land,
                 }),
             );
         }
@@ -499,8 +572,18 @@ fn simulate(plan: Value) -> Result<Value, String> {
     // protection tick (= entering hour P+1). Either way it equals row P+1, so the headline and
     // the OOP ledger row agree.
     let oop_hour = prot + 1;
-    let oop_idx = if has_oop { BASE + prot + 1 } else { states.len() - 1 };
-    let last = row_json(&states[oop_idx], oop_hour as i64, json!([]), &off);
+    let oop_idx = if has_oop {
+        BASE + prot + 1
+    } else {
+        states.len() - 1
+    };
+    let last = row_json(
+        &states[oop_idx],
+        oop_hour as i64,
+        plan::round_day_for_hour(sc.days_late, oop_hour as i64),
+        json!([]),
+        &off,
+    );
     let tmod = last
         .get("trainedModded")
         .and_then(Value::as_f64)
@@ -524,6 +607,92 @@ fn simulate(plan: Value) -> Result<Value, String> {
     Ok(json!({ "rows": rows, "final": Value::Object(final_obj) }))
 }
 
+/// Preview one draft event against the exact state at its hour without mutating
+/// the stored plan. Reusing an existing id replaces that event in the temporary copy.
+#[tauri::command]
+fn preview_event(mut plan: Value, mut event: Value) -> Result<Value, String> {
+    let id = event
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+        .unwrap_or("__preview__")
+        .to_string();
+    if event
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .is_empty()
+    {
+        event
+            .as_object_mut()
+            .ok_or_else(|| "event preview must be an object".to_string())?
+            .insert("id".into(), json!(id));
+    }
+    let obj = plan
+        .as_object_mut()
+        .ok_or_else(|| "plan must be an object".to_string())?;
+    let events = obj.entry("events").or_insert_with(|| json!([]));
+    let list = events
+        .as_array_mut()
+        .ok_or_else(|| "plan events must be an array".to_string())?;
+    if let Some(index) = list
+        .iter()
+        .position(|existing| existing.get("id").and_then(Value::as_str) == Some(id.as_str()))
+    {
+        list[index] = event;
+    } else {
+        list.push(event);
+    }
+
+    let out = simulate(plan)?;
+    let rows = out
+        .get("rows")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "event preview produced no rows".to_string())?;
+    for row in rows {
+        if let Some(found) = row
+            .get("events")
+            .and_then(Value::as_array)
+            .and_then(|items| {
+                items
+                    .iter()
+                    .find(|item| item.get("id").and_then(Value::as_str) == Some(id.as_str()))
+            })
+        {
+            return Ok(json!({ "outcome": found, "row": row }));
+        }
+    }
+    Err("event preview did not reach its scheduled hour".to_string())
+}
+
+/// Exact no-war, non-repeat land result for the event editor. The shared combat
+/// module owns the live piecewise invasion formula; the UI only displays it.
+#[tauri::command]
+fn invasion_land_gain(attacker_land: i64, target_land: i64) -> Result<Value, String> {
+    if attacker_land <= 0 {
+        return Err("attacker land must be positive".to_string());
+    }
+    if target_land <= 0 {
+        return Err("target land must be positive".to_string());
+    }
+    if !combat::in_range(attacker_land, target_land) {
+        return Err(format!(
+            "target at {target_land} acres is outside the legal 40%-250% invasion range"
+        ));
+    }
+
+    let conquered = combat::land_lost(attacker_land, target_land);
+    let gained = combat::land_gained(attacker_land, target_land);
+    Ok(json!({
+        "attackerLand": attacker_land,
+        "targetLand": target_land,
+        "rangePct": combat::dominion_range(attacker_land, target_land),
+        "conquered": conquered,
+        "generated": gained - conquered,
+        "gained": gained,
+    }))
+}
+
 /// Race keys for the LIVE round-50 roster (21 races; Human first). Drives the
 /// race picker. = source-`playable` AND not admin-disabled in data/round50.json.
 #[tauri::command]
@@ -544,6 +713,7 @@ fn races() -> Vec<String> {
 #[tauri::command]
 fn meta(race: String) -> Value {
     let d = data::get();
+    let return_state = config::start_state("advanced", 0, &race);
     let units: Vec<Value> = d
         .races
         .get(&race)
@@ -560,6 +730,8 @@ fn meta(race: String) -> Value {
                         "plat": u.cost.get("platinum").copied().unwrap_or(0),
                         "ore": u.cost.get("ore").copied().unwrap_or(0),
                         "kind": if i < 2 { "specialist" } else { "elite" },
+                        "returnHours": combat::unit_return_hours(&return_state, i + 1),
+                        "needBoat": u.need_boat,
                         // not_trainable units (e.g. Planewalker's summoned slots) are hidden
                         // from the Train tab — the game can't train them either.
                         "trainable": !u.perks.contains_key("not_trainable"),
@@ -636,7 +808,11 @@ fn meta(race: String) -> Value {
     let resources = json!({
         "ore": engine::race_resources::race_has_training_resource(&race, "ore"),
     });
-    json!({ "units": units, "techs": techs, "buildingLand": building_land, "homeLand": home, "spells": spells, "resources": resources })
+    json!({
+        "units": units, "techs": techs, "buildingLand": building_land,
+        "homeLand": home, "spells": spells, "resources": resources,
+        "boatCapacity": calc::boat_capacity(&return_state),
+    })
 }
 
 /// Short human label for a self-spell's protection-relevant effect (economy/defense),
@@ -653,6 +829,8 @@ fn spell_effect_desc(perks: &HashMap<String, f64>) -> String {
             "population_growth" => "population growth",
             "defense" => "defense",
             "max_population" => "housing",
+            "casualties" => "casualties",
+            "casualties_offense" => "offensive casualties",
             _ => return None,
         })
     };
@@ -858,11 +1036,118 @@ fn capabilities() -> Value {
 fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
-            simulate, races, meta, capabilities,
-            save_build, list_saves, load_build, delete_save, autosave, latest_autosave
+            simulate,
+            preview_event,
+            invasion_land_gain,
+            races,
+            meta,
+            capabilities,
+            save_build,
+            list_saves,
+            load_build,
+            delete_save,
+            autosave,
+            latest_autosave
         ])
         .run(tauri::generate_context!())
         .expect("error while running OVERTURE");
+}
+
+#[cfg(test)]
+mod event_tests {
+    use super::*;
+
+    #[test]
+    fn invasion_land_gain_uses_live_piecewise_formula() {
+        let result = invasion_land_gain(1_000, 800).expect("legal invasion range");
+        assert_eq!(result["conquered"], 41);
+        assert_eq!(result["generated"], 41);
+        assert_eq!(result["gained"], 82);
+        assert_eq!(result["rangePct"], 80.0);
+
+        assert!(invasion_land_gain(1_000, 399)
+            .unwrap_err()
+            .contains("outside the legal"));
+    }
+
+    #[test]
+    fn invasion_event_is_isolated_and_returns_land_and_survivors_on_schedule() {
+        let mut hours: Vec<Value> = (0..48).map(|_| json!([])).collect();
+        hours[0] = json!([
+            { "type": "bank", "source": "resource_platinum", "target": "resource_ore", "amount": 10_000 },
+            { "type": "train", "slot": 4, "n": 50 }
+        ]);
+        let plan = json!({
+            "race": "human",
+            "dpTarget": 0,
+            "opening": { "home": 200, "farm": 120, "dock": 30 },
+            "hours": hours,
+            "oopActions": [],
+            "events": [{
+                "type": "invasion", "id": "oop-hit", "hour": 49,
+                "targetLand": 300, "targetDp": 100,
+                "sent": [0, 0, 0, 50],
+                "landByType": {
+                    "plain": 2, "swamp": 2, "hill": 2, "mountain": 2,
+                    "forest": 2, "cavern": 2, "water": 2
+                },
+                "prestige": 10
+            }]
+        });
+        let out = simulate(plan).expect("event simulation");
+        let rows = out["rows"].as_array().unwrap();
+        let hit = &rows[49];
+        let event = &hit["events"][0];
+        assert_eq!(event["id"], "oop-hit");
+        assert_eq!(event["returnHours"][3], 9);
+        assert_eq!(event["landReturnHour"], 61);
+        assert!(event["populationFreed"].as_i64().unwrap() > 0);
+        assert_eq!(hit["military"]["u4"], 0, "sent troops leave home immediately");
+        assert!(
+            hit["away"]["u4"].as_i64().unwrap() > 0,
+            "survivors remain in population while away"
+        );
+        assert_eq!(rows[58]["away"]["u4"], 0, "9h Cavalry have returned by H58");
+        assert_eq!(rows[61]["land"].as_i64().unwrap(), 364);
+        for land in LAND_TYPES {
+            assert!(rows[61]["landBy"][land].as_i64().unwrap() >= 2);
+        }
+        assert_eq!(out["final"]["land"], 350);
+        assert_eq!(out["final"]["military"]["u4"], 50);
+    }
+
+    #[test]
+    fn invasion_event_rejects_live_safety_violations_without_state_change() {
+        let event = scenario_event::ScenarioEvent::Invasion {
+            id: "unsafe-hit".to_string(),
+            hour: 49,
+            target_land: 800,
+            target_dp: 100.0,
+            sent: [1_000, 0, 0, 0],
+            land_by_type: HashMap::new(),
+            prestige: 0,
+            casualties_override: None,
+        };
+        let mut state = DominionState::default();
+        state.race = "human".to_string();
+        state.land_plain = 1_000;
+        state.military_unit1 = 1_000;
+        state.military_unit4 = 300;
+        state.resource_boats = 100.0;
+        state.morale = 100;
+        let before = state.clone();
+        assert!(scenario_event::apply_event(&mut state, &event)
+            .unwrap_err()
+            .contains("5:4 rule"));
+        assert_eq!(state, before);
+
+        state.morale = 79;
+        let before = state.clone();
+        assert!(scenario_event::apply_event(&mut state, &event)
+            .unwrap_err()
+            .contains("80 morale"));
+        assert_eq!(state, before);
+    }
 }
 
 #[cfg(test)]

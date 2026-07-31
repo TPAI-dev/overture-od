@@ -29,7 +29,7 @@ const LAND_TYPES = ["plain", "swamp", "hill", "mountain", "forest", "cavern", "w
 // (spell/bank/improve/research) and the physical ones (destroy/release/daily) are NOT here.
 const SOFT_OVERSPEND = new Set(["construct", "rezone", "explore", "train"]);
 // Timeline: protection is hours 1..48; hour 49 = OUT OF PROTECTION; 50.. = post-OOP window.
-const PROTECTION_HOURS = 48, OOP_HOUR = 49;
+const PROTECTION_HOURS = 48, OOP_HOUR = 49, MAX_EVENT_HOUR = 528, MAX_TRACE_HOUR = 540;
 // Self-spells are now data-driven per race (meta().spells) — see the Magic tab.
 const BANKABLE = ["platinum", "lumber", "ore", "gems"];
 // Bank exchange (BankingCalculator; bonus = 1 in protection): received = floor(amt·sell·buy).
@@ -39,10 +39,27 @@ const IMPROVEMENTS = ["science", "keep", "walls", "spires", "forges", "harbor"];
 
 const TABS = [
   ["build", "Build"], ["rezone", "Rezone"], ["explore", "Explore"], ["train", "Train"],
-  ["magic", "Magic"], ["bank", "Bank"], ["daily", "Daily"], ["manage", "Manage"], ["techs", "Techs"],
+  ["events", "Events"], ["magic", "Magic"], ["bank", "Bank"], ["daily", "Daily"], ["manage", "Manage"], ["techs", "Techs"],
 ];
 
 const int = (n) => Math.round(n || 0).toLocaleString("en-US");
+const rceil = (n) => Math.ceil(Math.round(n * 1e10) / 1e10);
+export function constructionCost(costs, discountedLand, count, resource) {
+  const n = Math.max(0, Math.trunc(count || 0));
+  const per = resource === "lumber" ? costs.constructLumber : costs.constructPlat;
+  const discounted = Math.min(n, Math.max(0, Math.trunc(discountedLand || 0)));
+  const multiplier = Number.isFinite(+costs.constructDiscountMultiplier) ? +costs.constructDiscountMultiplier : 1;
+  return per * n - (discounted > 0 ? rceil(per * discounted * (1 - multiplier)) : 0);
+}
+function maxAffordableConstruction(available, costs, discountedLand, resource, limit) {
+  let low = 0, high = Math.max(0, Math.trunc(limit || 0));
+  while (low < high) {
+    const mid = Math.floor((low + high + 1) / 2);
+    if (constructionCost(costs, discountedLand, mid, resource) <= available) low = mid;
+    else high = mid - 1;
+  }
+  return low;
+}
 // HTML-escape any plan-derived string before it lands in innerHTML. Plan fields can come from a
 // hand-edited or imported *.overture.json, so they're untrusted. The CSP already blocks inline
 // script, so this is defense-in-depth — but it also keeps a stray "<" or "&" in a label from
@@ -51,12 +68,14 @@ const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": 
 const el = (html) => { const t = document.createElement("template"); t.innerHTML = html.trim(); return t.content.firstElementChild; };
 
 export function createEditor(deps) {
-  // deps: { getPlan(), getTrace(), getMeta(), recompute(editHour), recordUndo(label) }
+  // deps: { getPlan(), getTrace(), getMeta(), recompute(editHour), previewEvent(event),
+  //         invasionLandGain(attackerLand, targetLand), recordUndo(label) }
   // recordUndo(label) snapshots the plan for undo/redo BEFORE a mutation (see app.js history).
   const scrim = document.getElementById("editorScrim");
   const root = document.getElementById("editor");
   let hour = 1, tab = "build", manageKind = "draft_rate", buildSel = "home", buildDir = "build", trainDir = "train";
   let exploreSel = "plain", trainSel = 1; // the lane currently picked in the Explore / Train windows
+  let eventKind = "invasion", editingEventId = null, previewSerial = 0;
 
   const plan = () => deps.getPlan();
   const meta = () => deps.getMeta() || { units: [], techs: [], buildingLand: {} };
@@ -109,7 +128,13 @@ export function createEditor(deps) {
     const w = freshWallet(row), c = row.costs, cur = laneSpentInRow(row, matchOf(type, key));
     if (type === "construct") {
       const lt = buildingLand(key);
-      w.platinum += cur * c.constructPlat; w.lumber += cur * c.constructLumber; w.free[lt] = (w.free[lt] || 0) + cur;
+      const total = (row.actions || []).filter((a) => a.type === "construct").reduce((sum, a) => sum + (a.n | 0), 0);
+      const without = Math.max(0, total - cur);
+      const enteringDiscounted = Math.max(0, Math.trunc(((row.enter || {}).discountedLand ?? row.discountedLand ?? 0)));
+      w.platinum += constructionCost(c, enteringDiscounted, total, "platinum") - constructionCost(c, enteringDiscounted, without, "platinum");
+      w.lumber += constructionCost(c, enteringDiscounted, total, "lumber") - constructionCost(c, enteringDiscounted, without, "lumber");
+      w.discountedLand = Math.max(0, enteringDiscounted - without);
+      w.free[lt] = (w.free[lt] || 0) + cur;
       return maxDetailed(w, { type, building: key, n: 0 });
     }
     if (type === "explore") {
@@ -148,6 +173,7 @@ export function createEditor(deps) {
       buildings: { ...row.buildings },
       units: { u1: m.u1 || 0, u2: m.u2 || 0, u3: m.u3 || 0, u4: m.u4 || 0, draftees: row.draftees },
       dailyPlatinum: row.dailyPlatinum, dailyLand: row.dailyLand,
+      discountedLand: row.discountedLand || 0,
       techs: [...(row.techs || [])],
       costs: row.costs,
     };
@@ -167,9 +193,14 @@ export function createEditor(deps) {
     switch (a.type) {
       case "construct": {
         const lt = buildingLand(a.building);
+        const platCost = constructionCost(c, w.discountedLand, n, "platinum");
+        const lumberCost = constructionCost(c, w.discountedLand, n, "lumber");
         if (n > w.free[lt]) r = `only ${int(w.free[lt])} free ${lt} land`;
-        else r = need("platinum", n * c.constructPlat) || need("lumber", n * c.constructLumber);
-        if (!dry) { w.platinum -= n * c.constructPlat; w.lumber -= n * c.constructLumber; w.free[lt] -= n; }
+        else r = need("platinum", platCost) || need("lumber", lumberCost);
+        if (!dry) {
+          w.platinum -= platCost; w.lumber -= lumberCost; w.free[lt] -= n;
+          w.discountedLand = Math.max(0, w.discountedLand - n);
+        }
         break;
       }
       case "rezone": {
@@ -249,10 +280,10 @@ export function createEditor(deps) {
     const c = w.costs, f = (x) => Math.max(0, Math.floor(x));
     let cands;
     switch (a.type) {
-      case "construct": { const lt = buildingLand(a.building); cands = [
-        { n: w.free[lt], why: `free ${lt} land` },
-        { n: f(w.platinum / Math.max(1, c.constructPlat)), why: "platinum" },
-        { n: f(w.lumber / Math.max(1, c.constructLumber)), why: "lumber" }]; break; }
+      case "construct": { const lt = buildingLand(a.building), limit = Math.max(0, w.free[lt] | 0); cands = [
+        { n: limit, why: `free ${lt} land` },
+        { n: maxAffordableConstruction(w.platinum, c, w.discountedLand, "platinum", limit), why: "platinum" },
+        { n: maxAffordableConstruction(w.lumber, c, w.discountedLand, "lumber", limit), why: "lumber" }]; break; }
       case "rezone": cands = [
         { n: w.free[a.from], why: `barren ${a.from} land` },
         { n: f(w.platinum / Math.max(1, c.rezonePlat)), why: "platinum" }]; break;
@@ -272,22 +303,54 @@ export function createEditor(deps) {
   }
 
   /* ───────── plan access ───────── */
-  const acts = () => (plan().hours[hour - 1] || (plan().hours[hour - 1] = []));
+  const acts = () => (hour >= 1 && hour <= plan().hours.length ? (plan().hours[hour - 1] || []) : []);
+  const mutableActs = () => {
+    while (plan().hours.length < hour) plan().hours.push([]);
+    return plan().hours[hour - 1] || (plan().hours[hour - 1] = []);
+  };
+  const eventsAt = () => (plan().events || []).filter((event) => (event.hour | 0) === hour);
   function commit(a) {
     deps.recordUndo("edit");
-    acts().push(a);
+    mutableActs().push(a);
     deps.recompute(hour).then(render);
   }
-  function removeAt(i) { deps.recordUndo("edit"); acts().splice(i, 1); deps.recompute(hour).then(render); }
+  function removeAt(i) { deps.recordUndo("edit"); mutableActs().splice(i, 1); deps.recompute(hour).then(render); }
   // Inline-edit a queued action's quantity straight from the QUEUED list — same commit path as
   // adding (snapshot for undo → mutate → re-simulate → re-render). Seamless: no delete-and-re-add.
   function editQty(i, key, raw) {
-    const list = acts();
+    const list = mutableActs();
     if (!list[i]) return;
     deps.recordUndo("edit");
     const n = Math.max(0, Math.floor(+raw || 0));
     list[i][key] = key === "rate" ? Math.min(100, n) : n;
     deps.recompute(hour).then(render);
+  }
+  const newEventId = () => (globalThis.crypto && typeof globalThis.crypto.randomUUID === "function")
+    ? globalThis.crypto.randomUUID()
+    : `event-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  function commitEvent(event) {
+    deps.recordUndo("event");
+    const p = plan(); p.events = p.events || [];
+    const existingIndex = p.events.findIndex((existing) => existing.id === event.id);
+    if (existingIndex >= 0) p.events[existingIndex] = event;
+    else p.events.push(event);
+    p.events.sort((a, b) => (a.hour | 0) - (b.hour | 0));
+    editingEventId = null;
+    deps.recompute(hour).then(render);
+  }
+  function removeEvent(id) {
+    deps.recordUndo("event");
+    plan().events = (plan().events || []).filter((event) => event.id !== id);
+    if (editingEventId === id) editingEventId = null;
+    deps.recompute(hour).then(render);
+  }
+  function editEvent(id) {
+    const event = (plan().events || []).find((item) => item.id === id);
+    if (!event) return;
+    editingEventId = id;
+    eventKind = event.type === "prestige" ? "prestige" : "invasion";
+    tab = "events";
+    render();
   }
   // Label + the one inline-editable numeric field (if any) + a colour `kind`, for a queued action.
   function describeAct(a) {
@@ -313,7 +376,10 @@ export function createEditor(deps) {
   /* ───────── render ───────── */
   function open(h) {
     if (root.hidden) { buildDir = "build"; trainDir = "train"; } // a FRESH open always defaults to producing, never destroy/release
-    hour = Math.max(0, Math.min(plan().hours.length, h)); // hour 0 = opening; 1..N editable (post-OOP incl.)
+    const traceMax = Math.min(MAX_TRACE_HOUR, Math.max(0, ((deps.getTrace() || {}).rows || []).length - 1));
+    const maxHour = Math.max(plan().hours.length, OOP_HOUR, traceMax);
+    hour = Math.max(0, Math.min(maxHour, h)); // events can extend the trace past the action horizon
+    if (hour > plan().hours.length) tab = "events";
     root.hidden = false; scrim.hidden = false;
     scrim.onclick = close;
     render();
@@ -321,7 +387,12 @@ export function createEditor(deps) {
   function close() { root.hidden = true; scrim.hidden = true; }
   // Re-render the open popover in place (e.g. after an external undo/redo changed this hour's
   // queued actions). Clamps the hour in case post-OOP hours were removed by the undo.
-  function rerender() { if (root.hidden) return; hour = Math.max(0, Math.min(plan().hours.length, hour)); render(); }
+  function rerender() {
+    if (root.hidden) return;
+    const traceMax = Math.min(MAX_TRACE_HOUR, Math.max(0, ((deps.getTrace() || {}).rows || []).length - 1));
+    hour = Math.max(0, Math.min(Math.max(plan().hours.length, OOP_HOUR, traceMax), hour));
+    render();
+  }
 
   // Per-race resource visibility (mirrors app.js showResource): ORE is the only conditional one — it
   // hides for races whose units never cost it (Merfolk etc.) unless the build actually holds ore. Hides
@@ -440,14 +511,14 @@ export function createEditor(deps) {
   function render() {
     if (hour === 0) return renderOpening();
     const w = remainingWallet();
-    const nActs = acts().length;
+    const nActs = acts().length, nEvents = eventsAt().length;
     root.innerHTML = `
       <div class="ed-head">
         <div class="ed-hour">
           <button class="ed-step" data-step="-1" aria-label="previous hour">◀</button>
           <span>HOUR <strong>${String(hour).padStart(2, "0")}</strong></span>
           <button class="ed-step" data-step="1" aria-label="next hour">▶</button>
-          <span class="ed-sub">${nActs ? nActs + " queued · " : ""}${hour < OOP_HOUR ? `${OOP_HOUR - hour}h to OOP` : (hour === OOP_HOUR ? "✦ out of protection" : `+${hour - OOP_HOUR}h post-OOP`)}</span>
+          <span class="ed-sub">${nActs || nEvents ? `${nActs + nEvents} queued · ` : ""}${hour < OOP_HOUR ? `${OOP_HOUR - hour}h to OOP` : (hour === OOP_HOUR ? "✦ out of protection" : `+${hour - OOP_HOUR}h post-OOP`)}</span>
         </div>
         <button class="ed-x" aria-label="close">✕</button>
       </div>
@@ -465,12 +536,19 @@ export function createEditor(deps) {
   }
   // The QUEUED-this-hour list (every action type for the current hour, inline-editable).
   function queueListHtml() {
-    const a = acts(), nActs = a.length;
-    return `<div class="ed-queue-cap">QUEUED @ HOUR ${String(hour).padStart(2, "0")}</div>
-      <div class="ed-queue-list">${nActs ? a.map((x, i) => {
+    const a = acts(), evs = eventsAt(), nQueued = a.length + evs.length;
+    const actionLines = a.map((x, i) => {
         const d = describeAct(x); const desc = esc(d.desc); // plan-derived — escape before innerHTML
         return `<div class="q-line ${d.kind || ""}"><span class="q-desc">${desc}</span>${d.edit ? `<input class="q-num" type="number" inputmode="numeric" data-i="${i}" data-k="${esc(d.edit.key)}" value="${esc(d.edit.val)}" aria-label="${desc} amount">${d.edit.unit ? `<span class="q-unit">${esc(d.edit.unit)}</span>` : ""}` : ""}<button class="q-x" data-i="${i}" aria-label="remove">✕</button></div>`;
-      }).join("") : '<div class="ed-empty">no actions yet — pick a tab and add one</div>'}</div>`;
+      }).join("");
+    const eventLines = evs.map((event) => {
+      const label = event.type === "invasion"
+        ? `invasion · ${Object.values(event.landByType || {}).reduce((sum, n) => sum + (n | 0), 0)} acres`
+        : `prestige · ${(event.amount | 0) >= 0 ? "+" : ""}${event.amount | 0}`;
+      return `<div class="q-line k-event"><span class="q-glyph">◆</span><span class="q-desc">${esc(label)}</span><button class="q-edit" data-eid="${esc(event.id || "")}" aria-label="edit event">edit</button><button class="q-x q-event-x" data-eid="${esc(event.id || "")}" aria-label="remove event">✕</button></div>`;
+    }).join("");
+    return `<div class="ed-queue-cap">QUEUED @ HOUR ${String(hour).padStart(2, "0")}</div>
+      <div class="ed-queue-list">${nQueued ? actionLines + eventLines : '<div class="ed-empty">no actions or events yet — pick a tab and add one</div>'}</div>`;
   }
   // Re-render the budget strip + queue in place (after an embedded-window edit) WITHOUT rebuilding the
   // form, so the window keeps its focus/selection. Re-prices off the freshly recomputed trace.
@@ -478,7 +556,9 @@ export function createEditor(deps) {
     const w = remainingWallet();
     const b = document.getElementById("edBudget"); if (b) b.innerHTML = budgetStrip(w);
     const q = document.getElementById("edQueue"); if (q) q.innerHTML = queueListHtml();
-    root.querySelectorAll(".q-x").forEach((x) => (x.onclick = () => removeAt(+x.dataset.i)));
+    root.querySelectorAll(".q-x:not(.q-event-x)").forEach((x) => (x.onclick = () => removeAt(+x.dataset.i)));
+    root.querySelectorAll(".q-event-x").forEach((x) => (x.onclick = () => removeEvent(x.dataset.eid)));
+    root.querySelectorAll(".q-edit").forEach((x) => (x.onclick = () => editEvent(x.dataset.eid)));
     root.querySelectorAll(".q-num").forEach((inp) => (inp.onchange = () => editQty(+inp.dataset.i, inp.dataset.k, inp.value)));
   }
 
@@ -545,7 +625,16 @@ export function createEditor(deps) {
     const free = entryRow().freeLandByType;
     // Reset the reverse-mode tint each render; the destroy/release branches re-apply it.
     const edFormEl = document.getElementById("edForm");
-    edFormEl.classList.remove("mode-danger", "mode-demob");
+    edFormEl.classList.remove("mode-danger", "mode-demob", "mode-event");
+    if (tab === "events") {
+      edFormEl.classList.add("mode-event");
+      renderEvents();
+      return;
+    }
+    if (hour > plan().hours.length) {
+      edFormEl.innerHTML = `<div class="ed-empty"><b>Action horizon ends at hour ${String(plan().hours.length).padStart(2, "0")}</b><br>Use the <b>Events</b> tab here, or extend post-OOP hours from the top bar to schedule economy actions.</div>`;
+      return;
+    }
     if (tab === "build") {
       // Build|Destroy directional switch — both directions share the building axis; destroy is
       // the inverse of construct (raze → barren), one flip away instead of buried in Manage.
@@ -560,7 +649,9 @@ export function createEditor(deps) {
         host.innerHTML = `${sw}${picker}<div class="ed-note" id="buildNote"></div><div class="ed-hg" id="edHg"></div>`;
         const mountSel = () => {
           const n = document.getElementById("buildNote");
-          if (n) n.textContent = `${int(c.constructPlat)} plat + ${int(c.constructLumber)} lumber each · sits on ${buildingLand(buildSel)} land · 12h to build · type a count down the hours`;
+          const discounted = entryRow().discountedLand || 0;
+          const discountNote = discounted > 0 ? ` · next ${int(discounted)} acres cost ${Math.round((c.constructDiscountMultiplier || 1) * 100)}%` : "";
+          if (n) n.textContent = `${int(c.constructPlat)} plat + ${int(c.constructLumber)} lumber normal cost${discountNote} · sits on ${buildingLand(buildSel)} land · 12h to build · type a count down the hours`;
           mountHourGrid(document.getElementById("edHg"), windowOpts({
             label: buildSel.replace(/_/g, " "), color: "--c-land", stateCols: buildStateCols,
             read: (h) => laneRead(h, (a) => a.type === "construct" && a.building === buildSel),
@@ -817,6 +908,245 @@ export function createEditor(deps) {
     host.querySelectorAll(".sp-once").forEach((b) => (b.onclick = () => castSpellOnce(b.dataset.k)));
   }
 
+  // ───────── Scenario events — isolated, post-OOP state mutations. An invasion
+  // previews against the exact row after same-hour actions/spells, then queues
+  // survivors, land, boats, and prestige through the engine's return system. ─────────
+  function renderEvents() {
+    const host = document.getElementById("edForm");
+    if (hour < OOP_HOUR) {
+      host.innerHTML = `<div class="event-lock"><span>◆</span><div><b>Events begin out of protection</b><p>Move to hour 49 or later to simulate an invasion or adjust prestige. Protection actions remain isolated and unchanged.</p><button type="button" id="eventToOop">go to hour 49 ▸</button></div></div>`;
+      host.querySelector("#eventToOop").onclick = () => { open(OOP_HOUR); deps.onNav && deps.onNav(OOP_HOUR); };
+      return;
+    }
+    if (hour > MAX_EVENT_HOUR) {
+      host.innerHTML = `<div class="event-lock"><span>◆</span><div><b>Return timeline</b><p>New events can be scheduled through hour ${MAX_EVENT_HOUR}. These later rows are retained so you can inspect the final 12-hour land and army returns.</p><button type="button" id="eventToLast">go to hour ${MAX_EVENT_HOUR} ▸</button></div></div>`;
+      host.querySelector("#eventToLast").onclick = () => { open(MAX_EVENT_HOUR); deps.onNav && deps.onNav(MAX_EVENT_HOUR); };
+      return;
+    }
+
+    const row = entryRow();
+    const current = editingEventId ? (plan().events || []).find((event) => event.id === editingEventId) : null;
+    if (current) eventKind = current.type === "prestige" ? "prestige" : "invasion";
+    const switcher = dirSwitch(eventKind, [["invasion", "Invasion", "event"], ["prestige", "Prestige", "event"]]);
+    const editBar = current ? `<div class="event-editbar"><span>editing saved event</span><button type="button" id="eventCancelEdit">cancel</button></div>` : "";
+
+    if (eventKind === "prestige") {
+      const amount = current && current.type === "prestige" ? (current.amount | 0) : 0;
+      host.innerHTML = `${switcher}${editBar}
+        <div class="event-hero"><span class="event-glyph">◇</span><div><b>Prestige adjustment</b><p>Add or remove prestige immediately at hour ${String(hour).padStart(2, "0")}.</p></div></div>
+        <div class="ed-grid1"><label class="ed-field"><span>prestige change (+ / −)</span><input id="evPrestigeAmount" type="number" inputmode="numeric" value="${amount}"></label></div>
+        <div class="event-preview" id="eventPreview"><span class="event-muted">Enter a non-zero amount.</span></div>
+        <button class="ed-add event-add" id="eventAdd" disabled>${current ? "save prestige event" : "add prestige event"}</button>
+        <div class="ed-note event-scope">Scenario-only and undoable. This does not alter protection actions or charge any resource.</div>`;
+      wireEventSwitch(); wireEventCancel();
+      const input = host.querySelector("#evPrestigeAmount"), add = host.querySelector("#eventAdd"), preview = host.querySelector("#eventPreview");
+      let valid = false, serial = 0;
+      const refresh = async () => {
+        const amount = Math.trunc(+input.value || 0); valid = false; add.disabled = true;
+        if (!amount) { preview.innerHTML = `<span class="event-muted">Enter a non-zero amount.</span>`; return; }
+        const draft = { type: "prestige", id: (current && current.id) || newEventId(), hour, amount };
+        const mine = ++serial;
+        preview.innerHTML = `<span class="event-loading">checking hour ${String(hour).padStart(2, "0")}…</span>`;
+        try {
+          const result = await deps.previewEvent(draft);
+          if (mine !== serial) return;
+          const next = (result.row && result.row.prestige) ?? ((row.prestige || 0) + amount);
+          preview.innerHTML = `<span class="fb-ok">✓ ${int(row.prestige || 0)} → <b>${int(next)} prestige</b> · immediate</span>`;
+          valid = true; add.disabled = false; add.onclick = () => valid && commitEvent(draft);
+        } catch (error) {
+          if (mine !== serial) return;
+          preview.innerHTML = `<span class="fb-bad">✕ ${esc(error && error.message ? error.message : error)}</span>`;
+        }
+      };
+      input.oninput = refresh; refresh();
+      return;
+    }
+
+    const inv = current && current.type === "invasion" ? current : null;
+    const targetLand = inv ? inv.targetLand : Math.max(1, Math.round((row.land || 1) * 0.75));
+    const targetDp = inv ? inv.targetDp : Math.max(0, Math.round((row.trainedOpModded || 0) * 0.72));
+    const sent = inv && Array.isArray(inv.sent) ? inv.sent : [0, 0, 0, 0];
+    const landBy = inv && inv.landByType ? inv.landByType : balancedLand(0);
+    const landTotal = LAND_TYPES.reduce((sum, land) => sum + (landBy[land] | 0), 0);
+    const overrideOn = !!(inv && Array.isArray(inv.casualtiesOverride));
+    const override = overrideOn ? inv.casualtiesOverride : [0, 0, 0, 0];
+    const units = (meta().units || []).slice(0, 4);
+    const military = row.military || {};
+    const needsBoat = (unit, idx) => {
+      const live = Array.isArray(row.unitNeedsBoat) ? row.unitNeedsBoat[idx] : undefined;
+      return typeof live === "boolean" ? live : unit.needBoat !== false;
+    };
+    const activeSpells = (row.spells || []).map((spell) => (meta().spells || []).find((item) => item.key === spell.key)?.name || spell.key.replace(/_/g, " "));
+
+    host.innerHTML = `${switcher}${editBar}
+      <div class="event-hero"><span class="event-glyph">◆</span><div><b>Simulate invasion</b><p>Same-hour spells and techs feed the casualty calculation. Heroes and wonders are intentionally outside OVERTURE.</p></div></div>
+      <div class="event-section">
+        <div class="event-section-head"><span>1 · target & army</span><span>${int(row.boats || 0)} boats · ${int(meta().boatCapacity || 30)} capacity</span></div>
+        <div class="ed-grid2">
+          ${numField("evTargetLand", "target land", targetLand, "--c-land")}
+          ${numField("evTargetDp", "target DP", targetDp, "--c-dp")}
+        </div>
+        <div class="event-units">${units.map((unit, idx) => `<label class="event-unit">
+          <span><b>${esc(unit.name)}</b><small>${unit.offense || 0}o/${unit.defense || 0}d · ${unit.returnHours || 12}h return${needsBoat(unit, idx) ? "" : " · no boat"}</small></span>
+          <input class="ev-sent" id="evSent${idx + 1}" type="number" min="0" inputmode="numeric" value="${sent[idx] | 0}" aria-label="${esc(unit.name)} sent">
+          <em>${int(military["u" + (idx + 1)] || 0)} home</em>
+        </label>`).join("")}</div>
+        <button class="event-fill" id="eventFillArmy" type="button">fill strongest boat-capped offense</button>
+        <div class="ed-note">The exact preview also enforces 80 morale, the 40%-home rule, and the 5:4 OP-to-home-DP ceiling.</div>
+      </div>
+
+      <div class="event-section">
+        <div class="event-section-head"><span>2 · conquered land</span><div class="event-land-actions"><button class="event-balance" id="eventFormula" type="button">use invasion formula</button><button class="event-balance" id="eventBalance" type="button">balance all 7</button></div></div>
+        <div class="ed-grid2 event-land-total">${numField("evLandTotal", "acres gained", landTotal, "--c-land")}${numField("evInvPrestige", "prestige gained", inv ? inv.prestige || 0 : 0, "--c-plat")}</div>
+        <div class="event-land-grid">${LAND_TYPES.map((land) => `<label><span>${land}</span><input class="ev-land" data-land="${land}" type="number" min="0" inputmode="numeric" value="${landBy[land] | 0}"></label>`).join("")}</div>
+        <div class="ed-note" id="eventLandNote">${inv ? "Saved land mix shown. Use the invasion formula to recalculate it from the current sizes." : "Calculating the default gain from the current dominion and target sizes…"} Land costs no exploration resources and always arrives at <b>H${hour + 12}</b>.</div>
+      </div>
+
+      <div class="event-section casualty-section">
+        <div class="event-section-head"><span>3 · casualties</span><label class="event-check"><input id="evOverrideOn" type="checkbox" ${overrideOn ? "checked" : ""}> manually override</label></div>
+        <div class="casualty-grid">${units.map((unit, idx) => `<div class="casualty-cell"><span>${esc(unit.name)}</span><b id="evCalc${idx + 1}">—</b><input class="ev-casualty" id="evCas${idx + 1}" type="number" min="0" inputmode="numeric" value="${override[idx] | 0}" aria-label="${esc(unit.name)} casualty override" ${overrideOn ? "" : "hidden"}></div>`).join("")}</div>
+        <div class="ed-note">Deaths are permanent and do <b>not</b> become draftees. They free total-pop space immediately; survivors stay in population and food use while away.</div>
+      </div>
+
+      <div class="event-preview" id="eventPreview"><span class="event-muted">Enter an army to calculate the hit.</span></div>
+      <button class="ed-add event-add" id="eventAdd" disabled>${inv ? "save invasion event" : "add invasion event"}</button>
+      <div class="ed-note event-scope">Active now: ${activeSpells.length ? activeSpells.map(esc).join(" · ") : "no spells"} · researched tech modifiers apply automatically · no heroes or wonders.</div>`;
+
+    wireEventSwitch(); wireEventCancel();
+    const balanceButton = host.querySelector("#eventBalance"), formulaButton = host.querySelector("#eventFormula");
+    const totalInput = host.querySelector("#evLandTotal"), targetInput = host.querySelector("#evTargetLand");
+    const landNote = host.querySelector("#eventLandNote");
+    const landInputs = [...host.querySelectorAll(".ev-land")];
+    let landAuto = !inv, landFormulaSerial = 0;
+    const distribute = () => {
+      const split = balancedLand(Math.max(0, Math.trunc(+totalInput.value || 0)));
+      for (const input of landInputs) input.value = split[input.dataset.land];
+    };
+    const sumLand = () => LAND_TYPES.reduce((sum, land) => sum + Math.max(0, Math.trunc(+(host.querySelector(`[data-land="${land}"]`).value) || 0)), 0);
+    balanceButton.onclick = () => { distribute(); schedulePreview(); };
+    totalInput.oninput = () => {
+      landAuto = false; distribute();
+      landNote.innerHTML = `Manual land override. Use the invasion formula to restore the size-based default. Land arrives at <b>H${hour + 12}</b>.`;
+      schedulePreview();
+    };
+    for (const input of landInputs) input.oninput = () => {
+      landAuto = false; totalInput.value = String(sumLand());
+      landNote.innerHTML = `Manual land mix. Use the invasion formula to restore the size-based default. Land arrives at <b>H${hour + 12}</b>.`;
+      schedulePreview();
+    };
+    async function recalculateLand() {
+      const target = Math.max(0, Math.trunc(+targetInput.value || 0));
+      const mine = ++landFormulaSerial;
+      formulaButton.disabled = true;
+      landNote.textContent = `Calculating the invasion gain for ${int(row.land)} acres against ${int(target)} acres…`;
+      try {
+        const result = await deps.invasionLandGain(Math.max(1, Math.trunc(row.land || 0)), target);
+        if (mine !== landFormulaSerial || !totalInput.isConnected) return;
+        totalInput.value = String(result.gained);
+        distribute(); landAuto = true;
+        landNote.innerHTML = `<b>${int(result.gained)} gained</b> at ${Number(result.rangePct).toFixed(1)}% range: ${int(result.conquered)} conquered + ${int(result.generated)} generated. Balanced across all seven types by default; edit any value to override. Land arrives at <b>H${hour + 12}</b>.`;
+        schedulePreview();
+      } catch (error) {
+        if (mine !== landFormulaSerial || !totalInput.isConnected) return;
+        landNote.innerHTML = `<span class="fb-bad">${esc(error && error.message ? error.message : error)}</span> Land arrives at <b>H${hour + 12}</b>.`;
+        schedulePreview();
+      } finally {
+        if (mine === landFormulaSerial && formulaButton.isConnected) formulaButton.disabled = false;
+      }
+    }
+    formulaButton.onclick = () => { landAuto = true; recalculateLand(); };
+    targetInput.oninput = () => { if (landAuto) recalculateLand(); else schedulePreview(); };
+
+    const overrideToggle = host.querySelector("#evOverrideOn");
+    const casualtyInputs = [...host.querySelectorAll(".ev-casualty")];
+    const syncOverride = () => casualtyInputs.forEach((input) => { input.hidden = !overrideToggle.checked; });
+    overrideToggle.onchange = () => {
+      syncOverride();
+      if (overrideToggle.checked) casualtyInputs.forEach((input, idx) => { if (!(+input.value > 0)) input.value = host.querySelector(`#evCalc${idx + 1}`).dataset.raw || "0"; });
+      schedulePreview();
+    };
+    syncOverride();
+
+    host.querySelector("#eventFillArmy").onclick = () => {
+      let seats = Math.floor(row.boats || 0) * (meta().boatCapacity || 30);
+      const ranked = units.map((unit, idx) => ({ unit, idx })).sort((a, b) => (b.unit.offense || 0) - (a.unit.offense || 0));
+      for (const { unit, idx } of ranked) {
+        const available = military["u" + (idx + 1)] || 0;
+        const boatRequired = needsBoat(unit, idx);
+        const take = (unit.offense || 0) <= 0 ? 0 : (boatRequired ? Math.min(available, seats) : available);
+        host.querySelector(`#evSent${idx + 1}`).value = String(take);
+        if (boatRequired) seats -= take;
+      }
+      schedulePreview();
+    };
+
+    let timer = null, lastDraft = null;
+    const collect = () => {
+      const draft = {
+        type: "invasion", id: (inv && inv.id) || newEventId(), hour,
+        targetLand: Math.max(0, Math.trunc(+(host.querySelector("#evTargetLand").value) || 0)),
+        targetDp: Math.max(0, +(host.querySelector("#evTargetDp").value) || 0),
+        sent: [1, 2, 3, 4].map((slot) => Math.max(0, Math.trunc(+(host.querySelector(`#evSent${slot}`).value) || 0))),
+        landByType: Object.fromEntries(LAND_TYPES.map((land) => [land, Math.max(0, Math.trunc(+(host.querySelector(`[data-land="${land}"]`).value) || 0))])),
+        prestige: Math.max(0, Math.trunc(+(host.querySelector("#evInvPrestige").value) || 0)),
+      };
+      if (overrideToggle.checked) draft.casualtiesOverride = [1, 2, 3, 4].map((slot) => Math.max(0, Math.trunc(+(host.querySelector(`#evCas${slot}`).value) || 0)));
+      return draft;
+    };
+    const add = host.querySelector("#eventAdd"), preview = host.querySelector("#eventPreview");
+    async function runPreview() {
+      const draft = collect(), mine = ++previewSerial;
+      lastDraft = null; add.disabled = true;
+      if (!draft.sent.some((count) => count > 0)) { preview.innerHTML = `<span class="event-muted">Enter an army to calculate the hit.</span>`; return; }
+      preview.innerHTML = `<span class="event-loading">calculating casualties from the exact hour-${String(hour).padStart(2, "0")} state…</span>`;
+      try {
+        const result = await deps.previewEvent(draft);
+        if (mine !== previewSerial) return;
+        const out = result.outcome;
+        (out.calculatedCasualties || []).forEach((count, idx) => {
+          const cell = host.querySelector(`#evCalc${idx + 1}`); if (!cell) return;
+          cell.textContent = int(count); cell.dataset.raw = String(count);
+        });
+        const casualtyTotal = (out.casualties || []).reduce((sum, count) => sum + count, 0);
+        const returnGroups = new Map();
+        (out.survivors || []).forEach((count, idx) => { if (count > 0) { const ret = out.returnHours[idx]; returnGroups.set(ret, (returnGroups.get(ret) || 0) + count); } });
+        const returns = [...returnGroups.entries()].sort((a, b) => a[0] - b[0]).map(([ret, count]) => `${int(count)} troops H${hour + ret}`).join(" · ");
+        const landArrival = out.landReturnHour ? `${int(out.landTotal)} acres at H${out.landReturnHour}` : `${int(out.landTotal)} acres`;
+        preview.innerHTML = `<div class="event-ok-head"><span>✓ successful simulation</span><b>${int(out.op)} OP &gt; ${int(out.targetDp)} DP</b></div>
+          <div class="event-metrics"><span><b>${int(casualtyTotal)}</b> casualties</span><span><b>${int(out.populationFreed)}</b> pop space freed now</span><span><b>${landArrival}</b></span></div>
+          <div class="event-return">${returns || "no troop survivors"}${out.prestigeReturnHour ? ` · ${int(out.prestige)} prestige H${out.prestigeReturnHour}` : ""}</div>`;
+        lastDraft = draft; add.disabled = false; add.onclick = () => lastDraft && commitEvent(lastDraft);
+      } catch (error) {
+        if (mine !== previewSerial) return;
+        preview.innerHTML = `<span class="fb-bad">✕ ${esc(error && error.message ? error.message : error)}</span>`;
+      }
+    }
+    function schedulePreview() { clearTimeout(timer); timer = setTimeout(runPreview, 120); }
+    host.querySelectorAll("input").forEach((input) => {
+      if (!input.classList.contains("ev-land") && input !== totalInput && input !== targetInput && input !== overrideToggle) input.oninput = schedulePreview;
+    });
+    if (inv) runPreview(); else recalculateLand();
+  }
+
+  function balancedLand(total) {
+    const amount = Math.max(0, Math.trunc(total || 0));
+    const base = Math.floor(amount / LAND_TYPES.length), remainder = amount % LAND_TYPES.length;
+    return Object.fromEntries(LAND_TYPES.map((land, index) => [land, base + (index < remainder ? 1 : 0)]));
+  }
+  function wireEventSwitch() {
+    document.querySelectorAll("#edForm .ed-switch .ed-sw").forEach((button) => {
+      button.onclick = () => {
+        eventKind = button.dataset.dir;
+        if (editingEventId) editingEventId = null;
+        renderForm(remainingWallet());
+      };
+    });
+  }
+  function wireEventCancel() {
+    const button = document.getElementById("eventCancelEdit");
+    if (button) button.onclick = () => { editingEventId = null; renderForm(remainingWallet()); };
+  }
+
   function renderManage(c) {
     const body = document.getElementById("manageBody");
     const r = entryRow();
@@ -901,11 +1231,16 @@ export function platinumFlow(trace) {
     // daily-platinum claim pays peasants×4 at the ENTERING peasant count (enter.peasants),
     // which the engine stamps on the row; fall back to the displayed (post-action) peasants.
     const peas = (rows[h] && ((rows[h].enter && rows[h].enter.peasants) ?? rows[h].peasants)) || 0;
+    if (c) {
+      const constructCount = acts.filter((a) => a.type === "construct").reduce((sum, a) => sum + (a.n | 0), 0);
+      const enteringDiscounted = ((rows[h].enter || {}).discountedLand ?? rows[h].discountedLand ?? 0);
+      f.sinks.construct = constructionCost(c, enteringDiscounted, constructCount, "platinum");
+    }
     if (c) for (const a of acts) {
       const n = a.n | 0;
       switch (a.type) {
         case "explore": f.sinks.explore += n * c.explorePlat; break;
-        case "construct": f.sinks.construct += n * c.constructPlat; break;
+        case "construct": break;
         case "rezone": f.sinks.rezone += n * c.rezonePlat; break;
         case "train": { const t = c.train[a.slot] || {}; f.sinks.train += n * (t.platinum || 0); break; }
         case "improve": if (a.resource === "platinum") f.sinks.improve += a.amount | 0; break;

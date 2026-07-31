@@ -46,6 +46,9 @@ fn add_resource(s: &mut DominionState, key: &str, amount: i64) {
         "military_assassins" => s.military_assassins += amount,
         "military_wizards" => s.military_wizards += amount,
         "military_archmages" => s.military_archmages += amount,
+        "prestige" => s.prestige += amount,
+        "resource_boats" => s.resource_boats += amount as f64,
+        "discounted_land" => s.discounted_land += amount,
         _ => {}
     }
 }

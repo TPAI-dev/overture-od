@@ -1,7 +1,11 @@
 // bridge.js — single seam between the UI and the engine.
 // In Tauri: calls Rust commands that drive the UNTOUCHED engine crate.
 // In a browser: falls back to the reactive mock so the design previews live.
-import { simulate as mockSimulate, meta as mockMeta } from "./mock.js";
+import {
+  simulate as mockSimulate,
+  meta as mockMeta,
+  invasionLandGain as mockInvasionLandGain,
+} from "./mock.js";
 
 const TAURI = typeof window !== "undefined" && !!(window.__TAURI__ && window.__TAURI__.core);
 const invoke = (cmd, args) => window.__TAURI__.core.invoke(cmd, args);
@@ -36,6 +40,31 @@ export const engine = {
   async simulate(plan) {
     if (TAURI) return await invoke("simulate", { plan });
     return mockSimulate(plan);
+  },
+
+  // Preview a draft scenario event against the exact state at its scheduled
+  // hour. The backend works on a temporary plan copy; nothing is committed.
+  async previewEvent(plan, event) {
+    if (TAURI) return await invoke("preview_event", { plan, event });
+    const draft = typeof structuredClone === "function"
+      ? structuredClone(plan)
+      : JSON.parse(JSON.stringify(plan));
+    draft.events = draft.events || [];
+    const existingIndex = draft.events.findIndex((x) => x.id === event.id);
+    if (existingIndex >= 0) draft.events[existingIndex] = event;
+    else draft.events.push(event);
+    const out = mockSimulate(draft);
+    const row = out.rows.find((r) => (r.events || []).some((x) => x.id === event.id));
+    const outcome = row && row.events.find((x) => x.id === event.id);
+    if (!outcome) throw new Error("event preview did not reach its scheduled hour");
+    return { outcome, row };
+  },
+
+  // Exact desktop estimate for a successful no-war, non-repeat invasion. The
+  // Rust combat module owns the live piecewise formula and generated-land bonus.
+  async invasionLandGain(attackerLand, targetLand) {
+    if (TAURI) return await invoke("invasion_land_gain", { attackerLand, targetLand });
+    return mockInvasionLandGain(attackerLand, targetLand);
   },
 
   // ───────── build storage + autosave (desktop filesystem under ~/Documents/OVERTURE) ─────────

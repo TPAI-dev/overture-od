@@ -34,6 +34,23 @@ pub fn training_queue_total(s: &DominionState) -> i64 {
         .sum()
 }
 
+/// Surviving trained troops currently away on an invasion. The live game counts
+/// them in total population, food consumption, military percentage, and draft
+/// growth even though they are unavailable at home until their return queue lands.
+pub fn invasion_return_queue_total(s: &DominionState) -> i64 {
+    s.queue
+        .iter()
+        .filter(|q| {
+            q.source == "invasion"
+                && matches!(
+                    q.resource.as_str(),
+                    "military_unit1" | "military_unit2" | "military_unit3" | "military_unit4"
+                )
+        })
+        .map(|q| q.amount)
+        .sum()
+}
+
 /// getTotalBarrenLand = total land - built buildings - constructing buildings.
 pub fn total_barren_land(s: &DominionState) -> i64 {
     total_land(s) - s.total_buildings() - construction_queue_total(s)
@@ -228,11 +245,12 @@ pub fn unit_cost(s: &DominionState, slot: usize, resource: &str) -> i64 {
 }
 
 /// Does unit slot 1..=4 need a boat to be sent on invasion (data-driven; default
-/// true). Flying/amphibious units (`need_boat: false`) are exempt. The demon slot-4
-/// flying-spell special case is intentionally omitted (no spell-state in the QC
-/// send model); it would only make demon offense MORE deliverable, so omitting it
-/// is conservative.
+/// true). Flying/amphibious units (`need_boat: false`) and an active
+/// `flying_unitN` spell perk are exempt.
 pub fn unit_need_boat(s: &DominionState, slot: usize) -> bool {
+    if spell_perk(s, &format!("flying_unit{slot}")) != 0.0 {
+        return false;
+    }
     data::get()
         .races
         .get(&s.race)
@@ -667,10 +685,9 @@ pub fn max_peasant_population(s: &DominionState) -> i64 {
 }
 
 pub fn population_military(s: &DominionState) -> i64 {
-    // NOTE: getTotalUnitsForSlot(1..4) semantics (whether it includes per-slot
-    // training) to be confirmed when porting military training; for Human
-    // baseline + specialist training this matches (military_unitN on-hand +
-    // whole training queue).
+    // PHP getTotalUnitsForSlot includes trained troops away on invasion as well
+    // as the training queue. Casualties themselves are absent from both, which
+    // is what frees population space immediately after an invasion.
     s.military_draftees
         + s.military_unit1
         + s.military_unit2
@@ -681,6 +698,7 @@ pub fn population_military(s: &DominionState) -> i64 {
         + s.military_wizards
         + s.military_archmages
         + training_queue_total(s)
+        + invasion_return_queue_total(s)
 }
 
 pub fn population(s: &DominionState) -> i64 {
@@ -979,6 +997,46 @@ pub fn construct_lumber_cost(s: &DominionState) -> i64 {
         raw as f64
             * ((1.0 - factory_reduction(s)) + tp(s, "construction_lumber_cost") / 100.0).max(0.25),
     )
+}
+
+/// Fraction of normal construction cost paid on a qualified conquered acre.
+/// ConstructionCalculator derives this from the current day of the round and
+/// clamps the result to 35%-50%, rounded to four decimal places.
+pub fn discounted_land_multiplier(round_day: i64) -> f64 {
+    let additional_discount = 0.0075 * (round_day.max(1) as f64 + 42.0) - 0.0025;
+    php_round(clamp(1.0 - additional_discount, 0.35, 0.50), 4)
+}
+
+fn discounted_construction_acres(s: &DominionState, acres: i64) -> i64 {
+    s.discounted_land.max(0).min(acres.max(0))
+}
+
+/// Exact total platinum cost for `acres`, including the aggregate rceil used by
+/// the live discounted-land calculation.
+pub fn construct_platinum_total_cost(s: &DominionState, acres: i64, round_day: i64) -> i64 {
+    let acres = acres.max(0);
+    let per_acre = construct_platinum_cost(s);
+    let discounted = discounted_construction_acres(s, acres);
+    let savings = if discounted > 0 {
+        rceil(per_acre as f64 * discounted as f64 * (1.0 - discounted_land_multiplier(round_day)))
+    } else {
+        0
+    };
+    per_acre * acres - savings
+}
+
+/// Exact total lumber cost for `acres`, including the aggregate rceil used by
+/// the live discounted-land calculation.
+pub fn construct_lumber_total_cost(s: &DominionState, acres: i64, round_day: i64) -> i64 {
+    let acres = acres.max(0);
+    let per_acre = construct_lumber_cost(s);
+    let discounted = discounted_construction_acres(s, acres);
+    let savings = if discounted > 0 {
+        rceil(per_acre as f64 * discounted as f64 * (1.0 - discounted_land_multiplier(round_day)))
+    } else {
+        0
+    };
+    per_acre * acres - savings
 }
 
 pub fn rezone_platinum_cost(s: &DominionState) -> i64 {

@@ -69,7 +69,25 @@ fn check(file: &str) {
     let path = format!("tests/golden/combat/{file}");
     let txt = fs::read_to_string(&path).unwrap_or_else(|_| panic!("missing combat vector {path}"));
     let v: Value = serde_json::from_str(&txt).unwrap();
-    let attacker = build(&v["attacker"]);
+    let mut attacker = build(&v["attacker"]);
+    if let Some(spells) = v.get("attackerSpells").and_then(Value::as_array) {
+        attacker
+            .spells
+            .extend(spells.iter().filter_map(Value::as_str).map(|key| {
+                engine::state::ActiveSpell {
+                    key: key.to_string(),
+                    duration: 12,
+                }
+            }));
+    }
+    if let Some(techs) = v.get("attackerTechs").and_then(Value::as_array) {
+        attacker.techs.extend(
+            techs
+                .iter()
+                .filter_map(Value::as_str)
+                .map(ToString::to_string),
+        );
+    }
     let target = build(&v["target"]);
     let c = &v["computed"];
     let (al, tl) = (calc::total_land(&attacker), calc::total_land(&target));
@@ -232,6 +250,14 @@ fn combat_overwhelmed() {
 #[test]
 fn combat_human_knights() {
     check("combat_human_knights.json"); // `casualties` -25 on Knights, both offense + defense
+}
+#[test]
+fn combat_casualty_spell() {
+    check("combat_casualty_spell.json"); // Regeneration's -30% global casualty modifier
+}
+#[test]
+fn combat_casualty_tech() {
+    check("combat_casualty_tech.json"); // Field Surgery's -7.5% researched-tech modifier
 }
 #[test]
 fn combat_undead_immortal() {

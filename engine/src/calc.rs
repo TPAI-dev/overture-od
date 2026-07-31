@@ -34,6 +34,23 @@ pub fn training_queue_total(s: &DominionState) -> i64 {
         .sum()
 }
 
+/// Surviving trained troops currently away on an invasion. The live game counts
+/// them in total population, food consumption, military percentage, and draft
+/// growth even though they are unavailable at home until their return queue lands.
+pub fn invasion_return_queue_total(s: &DominionState) -> i64 {
+    s.queue
+        .iter()
+        .filter(|q| {
+            q.source == "invasion"
+                && matches!(
+                    q.resource.as_str(),
+                    "military_unit1" | "military_unit2" | "military_unit3" | "military_unit4"
+                )
+        })
+        .map(|q| q.amount)
+        .sum()
+}
+
 /// getTotalBarrenLand = total land - built buildings - constructing buildings.
 pub fn total_barren_land(s: &DominionState) -> i64 {
     total_land(s) - s.total_buildings() - construction_queue_total(s)
@@ -667,10 +684,9 @@ pub fn max_peasant_population(s: &DominionState) -> i64 {
 }
 
 pub fn population_military(s: &DominionState) -> i64 {
-    // NOTE: getTotalUnitsForSlot(1..4) semantics (whether it includes per-slot
-    // training) to be confirmed when porting military training; for Human
-    // baseline + specialist training this matches (military_unitN on-hand +
-    // whole training queue).
+    // PHP getTotalUnitsForSlot includes trained troops away on invasion as well
+    // as the training queue. Casualties themselves are absent from both, which
+    // is what frees population space immediately after an invasion.
     s.military_draftees
         + s.military_unit1
         + s.military_unit2
@@ -681,6 +697,7 @@ pub fn population_military(s: &DominionState) -> i64 {
         + s.military_wizards
         + s.military_archmages
         + training_queue_total(s)
+        + invasion_return_queue_total(s)
 }
 
 pub fn population(s: &DominionState) -> i64 {

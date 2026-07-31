@@ -13,5 +13,6 @@ pub mod networth;
 pub mod plan;
 pub mod race_resources;
 pub mod rounding;
+pub mod scenario_event;
 pub mod state;
 pub mod tick;

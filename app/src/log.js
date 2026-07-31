@@ -150,6 +150,9 @@ export function buildLog(plan, trace, meta) {
   if (N > OOP_HOUR) {
     warnings.push("Hours 50+ are post-OOP planning — included for reference but ignored by the in-game protection import (it applies hours 1–49).");
   }
+  if ((plan.events || []).length) {
+    warnings.push(`${plan.events.length} scenario event${plan.events.length === 1 ? " is" : "s are"} saved in the OVERTURE build but excluded from the protection import log.`);
+  }
 
   return { text: out.join("\n") + "\n", warnings, hours: out.filter((l) => l.startsWith("======")).length };
 }

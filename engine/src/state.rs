@@ -108,6 +108,11 @@ pub struct DominionState {
     // --- conquered/lost land trackers (drive explored-land cost split) ---
     pub stat_total_land_conquered: i64,
     pub stat_total_land_lost: i64,
+    /// Acres from an in-range invasion that qualify for discounted construction.
+    /// Scenario events queue these beside the returning land; protection states
+    /// keep the serde-default zero value and remain behaviorally unchanged.
+    #[serde(default)]
+    pub discounted_land: i64,
 
     // --- queues & active spells ---
     pub queue: Vec<QueueEntry>,

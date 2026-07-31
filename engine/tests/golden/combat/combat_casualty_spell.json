@@ -1,0 +1,72 @@
+{
+    "attacker": {
+        "race": "Human",
+        "land": {
+            "plain": 1000
+        },
+        "military": {
+            "unit1": 10000
+        },
+        "draftees": 0,
+        "prestige": 250,
+        "morale": 100
+    },
+    "target": {
+        "race": "Human",
+        "land": {
+            "plain": 800
+        },
+        "military": {
+            "unit2": 9667
+        },
+        "draftees": 0,
+        "prestige": 250,
+        "morale": 100
+    },
+    "attackerSpells": [
+        "regeneration"
+    ],
+    "attackerTechs": [],
+    "unitsSent": {
+        "1": 10000,
+        "2": 0,
+        "3": 0,
+        "4": 0
+    },
+    "discounted_land": null,
+    "prestige_range_sweep": null,
+    "computed": {
+        "range": 80,
+        "in_range": true,
+        "op": 30749.999999999996,
+        "temple_reduction": 0,
+        "dp_with_temples": 29001,
+        "land_lost": 41,
+        "land_lost_by_type": {
+            "plain": 41
+        },
+        "success": true,
+        "prestige_gain": 46,
+        "prestige_loss": -13,
+        "prestige_penalty": -13,
+        "attacker_units_lost": {
+            "1": 562
+        },
+        "defender_units_lost": {
+            "2": 295
+        },
+        "converted_units": {},
+        "plunder": {},
+        "salvage": {},
+        "attacker_research_points": 250,
+        "research_return_hours": 12,
+        "return_hours": {
+            "1": 12,
+            "2": 12,
+            "3": 12,
+            "4": 9
+        },
+        "slowest_return_hours": 12,
+        "resource_return_hours": 12
+    }
+}

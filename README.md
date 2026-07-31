@@ -1,6 +1,6 @@
 # OVERTURE
 
-A desktop **build studio** for the protection period of [OpenDominion](https://github.com/OpenDominion/OpenDominion) — plan your dominion's first 48 in-game hours (and the out-of-protection economy that follows) against a **bit-exact** simulation of the round-50 game.
+A desktop **build studio** for [OpenDominion](https://github.com/OpenDominion/OpenDominion) — plan your dominion's first 48 in-game hours, then add explicit post-protection scenario events, against a **bit-exact** simulation of the round-50 game.
 
 ![Overture — the 48-hour protection timeline, per-hour ledger, live state inspector, and resource-trajectory charts](docs/screenshot.png)
 
@@ -12,7 +12,7 @@ OVERTURE pairs a deterministic Rust engine — a clean-room reimplementation of 
 
 ## What it is — and isn't
 
-OVERTURE is the **simulator and planner**: you make the decisions, it tells you exactly what the game would do. It is **not** an auto-solver — there is no automated build optimizer in this release. It models the **protection period + post-OOP economy**, not the full multiplayer game.
+OVERTURE is the **simulator and planner**: you make the decisions, it tells you what the modeled game rules would do. It is **not** an auto-solver — there is no automated build optimizer in this release. It models the **protection period + post-OOP economy + explicit scenario events**, not the full multiplayer game.
 
 ### Modeled — and golden-validated against the real game
 
@@ -25,10 +25,12 @@ OVERTURE is the **simulator and planner**: you make the decisions, it tells you 
 - **Tech research**, **late-start** bonuses, **starvation** casualties
 - The **leave-protection defense gate** and **defensive power** (raw + modded, incl. temple reduction)
 - Standalone **combat / range calculators** (`engine/src/combat.rs`), golden-tested
+- Post-OOP **invasion events** with exact range/land-gain formulas, spell/tech/unit-perk casualties, optional manual casualty overrides, 9h/12h troop returns, 12h typed-land returns, boat/morale/home-force safeguards, and population-space effects
+- Immediate signed **prestige adjustment events**
 
 ### Not modeled (out of scope for this release)
 
-- End-to-end **invasion / attacker** game loop
+- Automated target selection, war history, repeat-hit penalties, or a full **attacker game loop** (invasions are explicit user-authored scenario events)
 - **Espionage** / spy operations
 - **Heroes**
 - **Wonders**

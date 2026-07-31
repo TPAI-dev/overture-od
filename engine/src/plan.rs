@@ -336,8 +336,6 @@ pub fn apply_action(s: &mut DominionState, a: &Value) {
             s.morale -= drop.min(s.morale);
         }
         "construct" => {
-            let plat_per = calc::construct_platinum_cost(s);
-            let lumber_per = calc::construct_lumber_cost(s);
             let mut total = 0i64;
             if let Some(data) = a["data"].as_object() {
                 for (k, v) in data {
@@ -351,8 +349,9 @@ pub fn apply_action(s: &mut DominionState, a: &Value) {
                     });
                 }
             }
-            s.resource_platinum -= plat_per * total;
-            s.resource_lumber -= lumber_per * total;
+            s.resource_platinum -= calc::construct_platinum_total_cost(s, total);
+            s.resource_lumber -= calc::construct_lumber_total_cost(s, total);
+            s.discounted_land = (s.discounted_land - total).max(0);
         }
         "rezone" => {
             let plat_per = calc::rezone_platinum_cost(s);

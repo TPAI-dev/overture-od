@@ -258,6 +258,7 @@ fn costs_json(s: &DominionState) -> Value {
         "exploreDraftee": calc::explore_draftee_cost(s),
         "constructPlat": calc::construct_platinum_cost(s),
         "constructLumber": calc::construct_lumber_cost(s),
+        "constructDiscountMultiplier": calc::discounted_land_multiplier(),
         "rezonePlat": calc::rezone_platinum_cost(s),
         "techCost": calc::tech_cost(s),
         "train": {
@@ -376,6 +377,7 @@ fn row_json(s: &DominionState, hour: i64, actions: Value, off: &HashMap<String, 
         "opMult": op_mult,
         "morale": s.morale,
         "prestige": s.prestige,
+        "discountedLand": s.discounted_land,
         "tech": s.resource_tech,
         "barren": calc::total_barren_land(s),
         "freeLandByType": free_land_by_type(s, off),
@@ -546,6 +548,7 @@ fn simulate(plan: Value) -> Result<Value, String> {
                     "dailyPlatinum": entering.daily_platinum,
                     "dailyLand": entering.daily_land,
                     "peasants": entering.peasants,
+                    "discountedLand": entering.discounted_land,
                 }),
             );
         }

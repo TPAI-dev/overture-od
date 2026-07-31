@@ -43,6 +43,23 @@ const TABS = [
 ];
 
 const int = (n) => Math.round(n || 0).toLocaleString("en-US");
+const rceil = (n) => Math.ceil(Math.round(n * 1e10) / 1e10);
+export function constructionCost(costs, discountedLand, count, resource) {
+  const n = Math.max(0, Math.trunc(count || 0));
+  const per = resource === "lumber" ? costs.constructLumber : costs.constructPlat;
+  const discounted = Math.min(n, Math.max(0, Math.trunc(discountedLand || 0)));
+  const multiplier = Number.isFinite(+costs.constructDiscountMultiplier) ? +costs.constructDiscountMultiplier : 1;
+  return per * n - (discounted > 0 ? rceil(per * discounted * (1 - multiplier)) : 0);
+}
+function maxAffordableConstruction(available, costs, discountedLand, resource, limit) {
+  let low = 0, high = Math.max(0, Math.trunc(limit || 0));
+  while (low < high) {
+    const mid = Math.floor((low + high + 1) / 2);
+    if (constructionCost(costs, discountedLand, mid, resource) <= available) low = mid;
+    else high = mid - 1;
+  }
+  return low;
+}
 // HTML-escape any plan-derived string before it lands in innerHTML. Plan fields can come from a
 // hand-edited or imported *.overture.json, so they're untrusted. The CSP already blocks inline
 // script, so this is defense-in-depth — but it also keeps a stray "<" or "&" in a label from
@@ -111,7 +128,13 @@ export function createEditor(deps) {
     const w = freshWallet(row), c = row.costs, cur = laneSpentInRow(row, matchOf(type, key));
     if (type === "construct") {
       const lt = buildingLand(key);
-      w.platinum += cur * c.constructPlat; w.lumber += cur * c.constructLumber; w.free[lt] = (w.free[lt] || 0) + cur;
+      const total = (row.actions || []).filter((a) => a.type === "construct").reduce((sum, a) => sum + (a.n | 0), 0);
+      const without = Math.max(0, total - cur);
+      const enteringDiscounted = Math.max(0, Math.trunc(((row.enter || {}).discountedLand ?? row.discountedLand ?? 0)));
+      w.platinum += constructionCost(c, enteringDiscounted, total, "platinum") - constructionCost(c, enteringDiscounted, without, "platinum");
+      w.lumber += constructionCost(c, enteringDiscounted, total, "lumber") - constructionCost(c, enteringDiscounted, without, "lumber");
+      w.discountedLand = Math.max(0, enteringDiscounted - without);
+      w.free[lt] = (w.free[lt] || 0) + cur;
       return maxDetailed(w, { type, building: key, n: 0 });
     }
     if (type === "explore") {
@@ -150,6 +173,7 @@ export function createEditor(deps) {
       buildings: { ...row.buildings },
       units: { u1: m.u1 || 0, u2: m.u2 || 0, u3: m.u3 || 0, u4: m.u4 || 0, draftees: row.draftees },
       dailyPlatinum: row.dailyPlatinum, dailyLand: row.dailyLand,
+      discountedLand: row.discountedLand || 0,
       techs: [...(row.techs || [])],
       costs: row.costs,
     };
@@ -169,9 +193,14 @@ export function createEditor(deps) {
     switch (a.type) {
       case "construct": {
         const lt = buildingLand(a.building);
+        const platCost = constructionCost(c, w.discountedLand, n, "platinum");
+        const lumberCost = constructionCost(c, w.discountedLand, n, "lumber");
         if (n > w.free[lt]) r = `only ${int(w.free[lt])} free ${lt} land`;
-        else r = need("platinum", n * c.constructPlat) || need("lumber", n * c.constructLumber);
-        if (!dry) { w.platinum -= n * c.constructPlat; w.lumber -= n * c.constructLumber; w.free[lt] -= n; }
+        else r = need("platinum", platCost) || need("lumber", lumberCost);
+        if (!dry) {
+          w.platinum -= platCost; w.lumber -= lumberCost; w.free[lt] -= n;
+          w.discountedLand = Math.max(0, w.discountedLand - n);
+        }
         break;
       }
       case "rezone": {
@@ -251,10 +280,10 @@ export function createEditor(deps) {
     const c = w.costs, f = (x) => Math.max(0, Math.floor(x));
     let cands;
     switch (a.type) {
-      case "construct": { const lt = buildingLand(a.building); cands = [
-        { n: w.free[lt], why: `free ${lt} land` },
-        { n: f(w.platinum / Math.max(1, c.constructPlat)), why: "platinum" },
-        { n: f(w.lumber / Math.max(1, c.constructLumber)), why: "lumber" }]; break; }
+      case "construct": { const lt = buildingLand(a.building), limit = Math.max(0, w.free[lt] | 0); cands = [
+        { n: limit, why: `free ${lt} land` },
+        { n: maxAffordableConstruction(w.platinum, c, w.discountedLand, "platinum", limit), why: "platinum" },
+        { n: maxAffordableConstruction(w.lumber, c, w.discountedLand, "lumber", limit), why: "lumber" }]; break; }
       case "rezone": cands = [
         { n: w.free[a.from], why: `barren ${a.from} land` },
         { n: f(w.platinum / Math.max(1, c.rezonePlat)), why: "platinum" }]; break;
@@ -620,7 +649,9 @@ export function createEditor(deps) {
         host.innerHTML = `${sw}${picker}<div class="ed-note" id="buildNote"></div><div class="ed-hg" id="edHg"></div>`;
         const mountSel = () => {
           const n = document.getElementById("buildNote");
-          if (n) n.textContent = `${int(c.constructPlat)} plat + ${int(c.constructLumber)} lumber each · sits on ${buildingLand(buildSel)} land · 12h to build · type a count down the hours`;
+          const discounted = entryRow().discountedLand || 0;
+          const discountNote = discounted > 0 ? ` · next ${int(discounted)} acres cost ${Math.round((c.constructDiscountMultiplier || 1) * 100)}%` : "";
+          if (n) n.textContent = `${int(c.constructPlat)} plat + ${int(c.constructLumber)} lumber normal cost${discountNote} · sits on ${buildingLand(buildSel)} land · 12h to build · type a count down the hours`;
           mountHourGrid(document.getElementById("edHg"), windowOpts({
             label: buildSel.replace(/_/g, " "), color: "--c-land", stateCols: buildStateCols,
             read: (h) => laneRead(h, (a) => a.type === "construct" && a.building === buildSel),
@@ -1195,11 +1226,16 @@ export function platinumFlow(trace) {
     // daily-platinum claim pays peasants×4 at the ENTERING peasant count (enter.peasants),
     // which the engine stamps on the row; fall back to the displayed (post-action) peasants.
     const peas = (rows[h] && ((rows[h].enter && rows[h].enter.peasants) ?? rows[h].peasants)) || 0;
+    if (c) {
+      const constructCount = acts.filter((a) => a.type === "construct").reduce((sum, a) => sum + (a.n | 0), 0);
+      const enteringDiscounted = ((rows[h].enter || {}).discountedLand ?? rows[h].discountedLand ?? 0);
+      f.sinks.construct = constructionCost(c, enteringDiscounted, constructCount, "platinum");
+    }
     if (c) for (const a of acts) {
       const n = a.n | 0;
       switch (a.type) {
         case "explore": f.sinks.explore += n * c.explorePlat; break;
-        case "construct": f.sinks.construct += n * c.constructPlat; break;
+        case "construct": break;
         case "rezone": f.sinks.rezone += n * c.rezonePlat; break;
         case "train": { const t = c.train[a.slot] || {}; f.sinks.train += n * (t.platinum || 0); break; }
         case "improve": if (a.resource === "platinum") f.sinks.improve += a.amount | 0; break;

@@ -597,6 +597,7 @@ function stateBlock(r, isFinal) {
   const incomingTypes = r.incomingByType || {};
   html += group("land", [
     ["committed", land], ["barren", barrenVal],
+    ...((r.discountedLand || 0) > 0 ? [["discounted build acres", int(r.discountedLand), true]] : []),
     ...LANDS.filter((l) => r.landBy[l] || incomingTypes[l]).map((l) => [l, `${int(r.landBy[l] || 0)}${incomingTypes[l] ? ` <span class="dim">(+${int(incomingTypes[l])})</span>` : ""}`, true]),
   ]);
   html += group("defense (trained — draftees excluded)", [

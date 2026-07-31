@@ -6,6 +6,10 @@ use crate::state::{DominionState, QueueEntry};
 // --- protection ---
 pub const ADVANCED_TICKS: i64 = 48;
 pub const QUICK_TICKS: i64 = 36;
+/// RoundFactory::ROUND_DURATION_IN_DAYS for the round-50 ruleset. Construction
+/// discounts for qualified conquered acres are based on the configured round
+/// duration, not on the dominion's current day.
+pub const ROUND_DURATION_DAYS: i64 = 47;
 
 // --- production per building / per capita (ProductionCalculator) ---
 pub const PEASANT_TAX: f64 = 2.7; // platinum per employed peasant

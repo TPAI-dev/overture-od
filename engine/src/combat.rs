@@ -198,6 +198,12 @@ fn casualty_multiplier(
     units: &[i64; 4],
     offensive: bool,
 ) -> f64 {
+    // `cancels_immortal` is the live calculator's first spell gate: it restores
+    // the unmodified multiplier and cancels every unit/non-unit reduction,
+    // including immortality.
+    if calc::spell_perk(s, "cancels_immortal") != 0.0 {
+        return 1.0;
+    }
     if calc::unit_perk_scalar(s, slot, "immortal") != 0.0 {
         return 0.0;
     }
@@ -250,6 +256,9 @@ fn casualty_multiplier(
         }
     }
     unit_bonus -= cas / 100.0;
+    if offensive && land_ratio >= 0.75 {
+        unit_bonus -= calc::unit_perk_scalar(s, slot, "casualties_offense_range") / 100.0;
+    }
     // reduce_combat_losses pairing (none in the active race set; faithful if added).
     if let Some(rcl) =
         (1..=4).find(|&sl| calc::unit_perk_scalar(s, sl, "reduce_combat_losses") != 0.0)

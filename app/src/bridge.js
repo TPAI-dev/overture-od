@@ -87,6 +87,22 @@ export const engine = {
   // ~/Documents/OVERTURE/saves so a caller can never reach an arbitrary file.
   async loadBuild(name) { return TAURI ? await invoke("load_build", { name }) : null; },
   async deleteSave(name) { return TAURI ? await invoke("delete_save", { name }) : null; },
+  // ───────── build storage + autosave (desktop filesystem under ~/Documents/OVERTURE) ─────────
+  // These return null in the browser preview so saves.js falls back to localStorage. The desktop
+  // app reads/writes real *.overture.json files via the Rust backend (no filesystem in a webview).
+  async saveBuild(name, plan) { return TAURI ? await invoke("save_build", { name, plan }) : null; },
+  async listSaves() { return TAURI ? await invoke("list_saves") : null; },
+  // load/delete take the save NAME (not a path): the backend resolves it under
+  // ~/Documents/OVERTURE/saves so a caller can never reach an arbitrary file.
+  async loadBuild(name) { return TAURI ? await invoke("load_build", { name }) : null; },
+  async deleteSave(name) { return TAURI ? await invoke("delete_save", { name }) : null; },
+  async autosave(plan) { if (!TAURI) return; try { await invoke("autosave", { plan }); } catch (_) {} },
+  async latestAutosave() { return TAURI ? await invoke("latest_autosave") : null; },
+  async exportExcel(plan) {
+    if (!TAURI) throw new Error("Excel export is available in the desktop app");
+    return await invoke("export_excel", { plan });
+  },
+
   async autosave(plan) { if (!TAURI) return; try { await invoke("autosave", { plan }); } catch (_) {} },
   async latestAutosave() { return TAURI ? await invoke("latest_autosave") : null; },
 };

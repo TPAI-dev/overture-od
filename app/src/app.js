@@ -1,7 +1,7 @@
 import { engine } from "./bridge.js";
 import { Spine } from "./spine.js";
 import { Charts } from "./charts.js";
-import { createEditor, scanFeasibility, platinumFlow, syncMaintainedSpells } from "./editor.js";
+import { createEditor, scanFeasibility, platinumFlow, syncMaintainedSpells, syncAutoInvest } from "./editor.js";
 import { createSaves } from "./saves.js";
 import { buildLog, downloadLog } from "./log.js";
 
@@ -267,6 +267,26 @@ async function init() {
     else toast(`⇩ exported <b>${fname}</b> — ${hours} protection ${hours === 1 ? "hour" : "hours"}, ready to import`, "ok");
   });
 
+  $("#excelBtn").addEventListener("click", async () => {
+    const button = $("#excelBtn");
+    button.disabled = true;
+    const old = button.innerHTML;
+    button.textContent = "… Excel";
+    try {
+      const result = await engine.exportExcel(plan);
+      const filename = String(result.path || "export.xlsm").split(/[\\/]/).pop();
+      const notes = (result.warnings || []).map(String);
+      const detail = notes.length ? ` · ${notes.join(" · ")}` : "";
+      toastText(`⇩ exported ${filename} to Documents/OVERTURE/exports${detail}`, notes.length ? "warn" : "ok");
+    } catch (error) {
+      toastText(`⚠ Excel export failed · ${String(error)}`, "warn");
+    } finally {
+      button.disabled = false;
+      button.innerHTML = old;
+    }
+  });
+
+  if (!engine.live) $("#excelBtn").hidden = true;
   $("#undoBtn").addEventListener("click", () => undo());
   $("#redoBtn").addEventListener("click", () => redo());
   updateHistoryButtons();
@@ -329,6 +349,7 @@ async function recompute(editHour = null) {
   // live. The next successful sim calls clearSimError(), so correcting the offending action
   // makes the error disappear on its own — no stale error left frozen on screen.
   syncMaintainedSpells(plan); // re-derive "keep up" spell casts to the current plan length (auto-extends when hours are added)
+  syncAutoInvest(plan); // re-derive auto-invest rule actions (manual overrides + skip hours respected)
   let next;
   try {
     next = await engine.simulate(plan);

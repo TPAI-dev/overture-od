@@ -55,6 +55,8 @@ pub struct Race {
     #[serde(default)]
     pub key: String,
     #[serde(default)]
+    pub name: String,
+    #[serde(default)]
     pub home_land_type: String,
     #[serde(default)]
     pub perks: HashMap<String, f64>,

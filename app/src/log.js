@@ -173,6 +173,7 @@ function renderHour(acts, entry, ctx) {
   const en = entry.enter || entry;
   const lines = [];
   let manaLeft = en.mana || 0; // self-spells are mana-gated (skipped if short)
+  let allSeen = 0; // invest-all actions consumed from the row echo, in order
   let claimedPlat = !!en.dailyPlatinum, claimedLand = !!en.dailyLand;
   let discountedLand = en.discountedLand ?? entry.discountedLand ?? 0;
   let pend = null;
@@ -210,7 +211,13 @@ function renderHour(acts, entry, ctx) {
     } else if (a.type === "improve") {
       // The game logs one line per improvement even when the UI submits a
       // multi-row allocation. Emitting every nonzero row preserves the action.
-      for (const [imp, amount] of Object.entries(a.data || {})) {
+      let data = a.data || {};
+      if (a.all === true) {
+        // invest-all placeholder — the engine echoes the resolved amount on the row's actions
+        const echo = (entry.actions || []).filter((x) => x.type === "improve" && x.all === true);
+        data = (echo[allSeen++] || {}).data || {};
+      }
+      for (const [imp, amount] of Object.entries(data)) {
         if ((amount | 0) > 0) lines.push(`You invested ${ig(amount)} ${a.resource} into ${imp}.`);
       }
     }

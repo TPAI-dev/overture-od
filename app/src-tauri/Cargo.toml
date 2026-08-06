@@ -1,6 +1,6 @@
 [package]
 name = "overture"
-version = "0.1.7"
+version = "0.1.8"
 edition = "2021"
 description = "OVERTURE — OpenDominion protection-period build studio"
 authors = ["lethal5808"]
@@ -13,6 +13,8 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
+zip = { version = "8.6", default-features = false, features = ["deflate"] }
 
 # The bit-exact game engine — imported READ-ONLY as the single source of truth.
 # This adapter only calls its public API; it never modifies engine logic.

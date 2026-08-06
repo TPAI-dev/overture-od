@@ -457,18 +457,33 @@ pub fn apply_action_at_round_day(s: &mut DominionState, a: &Value, round_day: i6
             };
             let mut investments = Vec::with_capacity(data.len());
             let mut total = 0i64;
-            for (typ, value) in data {
-                let Some(amount) = value.as_i64() else {
-                    return;
-                };
-                if !is_known_improvement(typ) || amount < 0 {
+            if a["all"].as_bool() == Some(true) {
+                // Invest-all (the app's auto-invest rules): the resource's ENTIRE current stock
+                // into exactly one improvement, resolved here at execution so every replay of the
+                // same plan invests the identical exact amount. The data value is a placeholder.
+                if data.len() != 1 {
                     return;
                 }
-                let Some(next_total) = total.checked_add(amount) else {
+                let (typ, _) = data.iter().next().unwrap();
+                if !is_known_improvement(typ) {
                     return;
-                };
-                total = next_total;
-                investments.push((typ, amount));
+                }
+                total = have;
+                investments.push((typ, have));
+            } else {
+                for (typ, value) in data {
+                    let Some(amount) = value.as_i64() else {
+                        return;
+                    };
+                    if !is_known_improvement(typ) || amount < 0 {
+                        return;
+                    }
+                    let Some(next_total) = total.checked_add(amount) else {
+                        return;
+                    };
+                    total = next_total;
+                    investments.push((typ, amount));
+                }
             }
             if total > 0 && total <= have {
                 for (typ, amount) in investments {
@@ -853,6 +868,23 @@ fn overture_action_error(a: &Value, where_: &str) -> Option<String> {
                     "missing improvement allocation data in improve action at {where_}"
                 ));
             };
+            // Invest-all shape ({all:true}): the amount is resolved from the live stock at
+            // execution, so the data value is a placeholder — require exactly one known
+            // improvement and skip the positive-total checks.
+            if a.get("all").and_then(Value::as_bool) == Some(true) {
+                if data.len() != 1 {
+                    return Some(format!(
+                        "invest-all needs exactly one improvement at {where_}"
+                    ));
+                }
+                let (improvement, _) = data.iter().next().unwrap();
+                if !is_known_improvement(improvement) {
+                    return Some(format!(
+                        "unknown castle improvement at {where_}: \"{improvement}\""
+                    ));
+                }
+                return None;
+            }
             let mut total = 0i64;
             for (improvement, value) in data {
                 if !is_known_improvement(improvement) {

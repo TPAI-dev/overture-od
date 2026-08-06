@@ -12,7 +12,10 @@
 // the macro past serde_json's default 128-deep expansion. Lift the limit for this crate.
 #![recursion_limit = "256"]
 
+mod excel_export;
 use std::collections::HashMap;
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use serde_json::{json, Map, Value};
@@ -581,7 +584,21 @@ fn simulate(plan: Value) -> Result<Value, String> {
                 .map(Vec::as_slice)
                 .unwrap_or(&[])
         };
+        // Capture each invest-all action's resolved amount (the resource's stock at its exact
+        // point in the hour's action order) so the row echo below reports real numbers in place
+        // of the plan's placeholder zeros.
+        let mut all_invests: Vec<i64> = Vec::new();
         for a in acts_h {
+            if a["type"].as_str() == Some("improve") && a["all"].as_bool() == Some(true) {
+                let stock = match a["resource"].as_str().unwrap_or("") {
+                    "platinum" => disp.resource_platinum,
+                    "lumber" => disp.resource_lumber,
+                    "ore" => disp.resource_ore,
+                    "gems" => disp.resource_gems,
+                    _ => 0,
+                };
+                all_invests.push(stock.max(0));
+            }
             plan::apply_action_at_round_day(&mut disp, a, round_day);
         }
         let event_outcomes = if h as i64 >= scenario_event::FIRST_EVENT_HOUR {
@@ -591,11 +608,32 @@ fn simulate(plan: Value) -> Result<Value, String> {
         };
         // app-shaped actions ride on the row they're taken from (the queued-action display); none
         // beyond the planned hours (e.g. the trailing post-OOP end row).
-        let actions = if h >= 1 {
+        let mut actions = if h >= 1 {
             hours_in.get(h - 1).cloned().unwrap_or_else(|| json!([]))
         } else {
             json!([])
         };
+        // Patch invest-all echoes with their resolved amounts (matched in order among the hour's
+        // invest-all actions).
+        if !all_invests.is_empty() {
+            if let Some(list) = actions.as_array_mut() {
+                let mut k = 0usize;
+                for act in list.iter_mut() {
+                    if act["type"].as_str() == Some("improve") && act["all"].as_bool() == Some(true)
+                    {
+                        let resolved = all_invests.get(k).copied().unwrap_or(0);
+                        k += 1;
+                        let target = act["data"]
+                            .as_object()
+                            .and_then(|d| d.keys().next().cloned());
+                        if let (Some(t), Some(obj)) = (target, act.as_object_mut()) {
+                            obj.insert("data".into(), json!({ t: resolved }));
+                            obj.insert("amount".into(), json!(resolved));
+                        }
+                    }
+                }
+            }
+        }
         let mut row = row_json(&disp, h as i64, round_day, actions, &off);
         // The log exporter re-derives each hour's actions from the ENTERING wallet (E_H) — it
         // gates self-spells on the entering mana and skips already-claimed dailies — so it needs
@@ -1124,6 +1162,64 @@ fn capabilities() -> Value {
     json!({ "swarm": false, "ruleset": ruleset_json() })
 }
 
+fn write_new_excel_export(
+    dir: &Path,
+    filename_stem: &str,
+    bytes: &[u8],
+    stamp: u64,
+) -> std::io::Result<PathBuf> {
+    std::fs::create_dir_all(dir)?;
+    for collision in 0..100u8 {
+        let suffix = if collision == 0 {
+            String::new()
+        } else {
+            format!("-{collision}")
+        };
+        let path = dir.join(format!("{filename_stem}-{stamp}{suffix}.xlsm"));
+        match OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(mut file) => {
+                file.write_all(bytes)?;
+                file.sync_all()?;
+                return Ok(path);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "could not allocate a unique Excel export filename",
+    ))
+}
+
+/// Create a macro-enabled copy of the community Round 51 workbook with the
+/// current OVERTURE plan written into its existing orange input cells.  The
+/// template itself is embedded read-only; exports land beside user saves under
+/// `<Documents>/OVERTURE/exports`.
+#[tauri::command]
+fn export_excel(app: tauri::AppHandle, plan: Value) -> Result<Value, String> {
+    let rendered = excel_export::render_overture_plan(&plan)?;
+    let dir = overture_root(&app)?.join("exports");
+    let race = safe_stem(&rendered.race_name)
+        .replace(' ', "-")
+        .to_ascii_lowercase();
+    let target = plan
+        .get("dpTarget")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0)
+        .round() as i64;
+    let filename_stem = format!("overture-{race}-{target}dp");
+    let path = write_new_excel_export(&dir, &filename_stem, &rendered.bytes, now_millis())
+        .map_err(|error| format!("Excel export failed: {error}"))?;
+    Ok(json!({
+        "path": path.to_string_lossy(),
+        "warnings": rendered.warnings,
+    }))
+}
+
+/// Which optional features this build includes. Lets the frontend hide UI for absent commands
+/// (e.g. the SWARM tab) instead of invoking a command that isn't registered. Always present.
+
 fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
@@ -1138,7 +1234,8 @@ fn main() {
             load_build,
             delete_save,
             autosave,
-            latest_autosave
+            latest_autosave,
+            export_excel
         ])
         .run(tauri::generate_context!())
         .expect("error while running OVERTURE");

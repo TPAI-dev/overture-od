@@ -292,6 +292,7 @@ export function simulate(plan) {
     // Capture the ENTERING wallet (E_H) the log exporter re-gates from, BEFORE this hour's
     // instant actions mutate the pools (mana / daily-claim flags / peasants).
     const enter = { mana, dailyPlatinum: dailyPlat, dailyLand: dailyLand, peasants, discountedLand };
+    const resolvedAll = []; // per-hour resolved invest-all amounts, in action order (for the row echo)
     // Instant actions FIRST — they affect THIS tick's balances (spell mana spent from the
     // current pool, daily claims, rezones, queued-build/explore/train payments). costs() is
     // recomputed per action, so a same-tick claim_land escalates the rezone/build after it.
@@ -351,6 +352,20 @@ export function simulate(plan) {
       } else if (a.type === "improve") {
         const res = a.resource, worth = INVESTMENT_WORTH[res];
         if (!worth) throw new Error("castle investments accept platinum, lumber, ore, or gems");
+        if (a.all === true) {
+          // invest-all (auto-invest rules): the entire current stock into one improvement,
+          // resolved here at execution; the row echo below reports the resolved amount.
+          const pool0 = { platinum: plat, lumber, ore, gems };
+          const keys = Object.keys(a.data || {});
+          if (keys.length !== 1 || !IMPROVEMENT_KEYS.includes(keys[0])) throw new Error("invest-all needs exactly one improvement");
+          const amt0 = Math.max(0, Math.floor(pool0[res] ?? 0));
+          resolvedAll.push(amt0);
+          if (amt0 > 0) {
+            improvements[keys[0]] += Math.floor(amt0 * worth * investmentMultiplier(res, keys[0]));
+            if (res === "platinum") plat -= amt0; else if (res === "lumber") lumber -= amt0; else if (res === "ore") ore -= amt0; else if (res === "gems") gems -= amt0;
+          }
+          continue;
+        }
         const entries = Object.entries(a.data || {});
         if (!entries.length || entries.some(([key, amount]) => !IMPROVEMENT_KEYS.includes(key) || !Number.isInteger(amount) || amount < 0)) {
           throw new Error("castle investment contains an invalid improvement allocation");
@@ -440,7 +455,19 @@ export function simulate(plan) {
     if (outcomes.length) eventsByHour.set(h, outcomes);
     // Snapshot the POST-instant-action state (A_H): production has NOT landed yet, so it shows
     // in the NEXT row. Carries hour h's actions + the entering-wallet `enter` fields (for the log).
-    { const row = snapshot(h); row.enter = enter; rows.push(row); }
+    {
+      const row = snapshot(h); row.enter = enter;
+      // Echo invest-all actions with their resolved amounts (a mapped copy — never mutate the plan).
+      if (resolvedAll.length) {
+        let k = 0;
+        row.actions = row.actions.map((a) => {
+          if (!(a.type === "improve" && a.all === true)) return a;
+          const amt = resolvedAll[k++] ?? 0, key = Object.keys(a.data || {})[0];
+          return { ...a, data: key ? { [key]: amt } : {}, amount: amt };
+        });
+      }
+      rows.push(row);
+    }
 
     // production
     plat += r((b.alchemy * 45 + employed() * 2.7) * (1 + scienceBonus() + (spells.midas_touch > 0 ? 0.1 : 0)));

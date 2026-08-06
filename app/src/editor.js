@@ -89,8 +89,11 @@ export function createEditor(deps) {
   const scrim = document.getElementById("editorScrim");
   const root = document.getElementById("editor");
   let hour = 1, tab = "build", manageKind = "draft_rate", buildSel = "home", buildDir = "build", trainDir = "train";
-  let exploreSel = "plain", trainSel = 1; // the lane currently picked in the Explore / Train windows
-  let improveResource = "gems";
+  let exploreSel = "plain", trainSel = 1; // the FOCUSED lane in the Build / Explore / Train windows
+  // Lanes pinned visible beside the focused one (per tab, session-local). Lanes with queued
+  // counts in the visible window always appear on their own (auto-lanes).
+  const buildPins = new Set(), explorePins = new Set(), trainPins = new Set();
+  let improveResource = "gems", improveTarget = "keep";
   let eventKind = "invasion", editingEventId = null, previewSerial = 0;
 
   const plan = () => deps.getPlan();
@@ -163,14 +166,77 @@ export function createEditor(deps) {
     for (const [res, per] of Object.entries(t)) w[res] = (w[res] || 0) + cur * per;
     return maxDetailed(w, { type, slot: key, n: 0 });
   }
+  // The window's hour span (mirrors mountHourGrid's own lo/hi) — used to detect which lanes
+  // have queued counts in view (auto-lanes).
+  const windowRange = () => {
+    const c = Math.max(1, Math.min(plan().hours.length, hour));
+    return [Math.max(1, c - 6), Math.min(plan().hours.length, c + 6)];
+  };
+  const laneHasCounts = (match, wlo, whi) => { for (let h = wlo; h <= whi; h++) if (laneRead(h, match) > 0) return true; return false; };
+  // Visible lanes for a tab: the focused lane, pinned lanes, and any lane with queued counts
+  // in the window — in the universe's own stable order.
+  const visibleLaneKeys = (universe, focused, pins, type) => {
+    const [wlo, whi] = windowRange();
+    return universe.filter((k) => k === focused || pins.has(k) || laneHasCounts(matchOf(type, k), wlo, whi));
+  };
+  // Retype: move a span's per-hour counts from one lane to another (summing into any counts the
+  // target already has). One undo step; the window remounts focused on the target with the span
+  // still selected.
+  const moveSpan = (type, makeFor, refocus) => (fromKey, toKey, sLo, sHi) => {
+    if (fromKey === toKey) return;
+    deps.recordUndo("edit");
+    for (let h = sLo; h <= sHi; h++) {
+      const n = laneRead(h, matchOf(type, fromKey));
+      if (n <= 0) continue;
+      laneWrite(h, matchOf(type, fromKey), null, 0);
+      const have = laneRead(h, matchOf(type, toKey));
+      laneWrite(h, matchOf(type, toKey), () => makeFor(toKey, have + n), have + n);
+    }
+    deps.recompute(sLo).then(() => { refocus(toKey, { lo: sLo, hi: sHi }); renderChrome(); });
+  };
   // Shared opts for every embedded window: centered on the current editor hour, refreshing the
   // budget strip + queue (not the form) after each commit so the window keeps focus.
   const windowOpts = (extra) => Object.assign({
     center: hour, radius: 6, maxHour: plan().hours.length, oopHour: OOP_HOUR,
     rowAt, recordUndo: deps.recordUndo, recompute: deps.recompute, afterCommit: () => renderChrome(),
-    // ← / → step the editor's focal hour (re-centers the window), mirroring the ◀ ▶ header buttons.
-    onStepHour: (d) => { open(hour + d); deps.onNav && deps.onNav(hour); },
+    // Step the focal hour from the cell the cursor is ON (never the stale mount center — the
+    // "arrow keys skip hours" bug). Re-centering remounts ONLY the grid, in place: a full
+    // render() would rebuild the whole form and reset its scroll — the jarring view shift.
+    onStepHour: (d, fromH) => { recenterWindow((fromH == null ? hour : fromH) + d); deps.onNav && deps.onNav(hour); },
+    // The focal hour FOLLOWS the cursor: walking rows (Enter/↑↓/click) retargets the header,
+    // budget strip, and queued list to the hour under the cursor — in place, no grid remount.
+    onCursor: (h) => { if (h === hour) return; hour = h; syncHourHead(); renderChrome(); },
   }, extra);
+  // The active tab's grid remount (registered by each grid tab's mountSel; null on form-only
+  // views). recenterWindow slides the ±6h window to a new focal hour IN PLACE: header + budget +
+  // queue patch, grid remounts centered — the rest of the form (chips, scroll position) stays put.
+  let remountWindow = null;
+  function recenterWindow(h) {
+    if (!remountWindow || h < 1 || h > plan().hours.length) { open(h); return; } // past the action horizon → the full events/horizon view
+    hour = h;
+    syncHourHead();
+    renderChrome();
+    remountWindow();
+  }
+  // Retarget the focal hour when the cursor crosses lanes (click or ←/→). The window re-centers
+  // on the hour the cursor came FROM, so the cell you land on is the one you pointed at.
+  function focusLaneAt(h) {
+    if (h == null || h === hour || h < 1 || h > plan().hours.length) return;
+    hour = h;
+    syncHourHead();
+    renderChrome();
+  }
+  // Patch the header's hour + countdown in place as the grid cursor walks rows (a full render()
+  // would remount the grid mid-keystroke and drop focus).
+  function syncHourHead() {
+    const num = root.querySelector(".ed-hour strong");
+    if (num) num.textContent = String(hour).padStart(2, "0");
+    const sub = root.querySelector(".ed-hour .ed-sub");
+    if (sub) {
+      const n = acts().length + eventsAt().length;
+      sub.textContent = `${n ? `${n} queued · ` : ""}${hour < OOP_HOUR ? `${OOP_HOUR - hour}h to OOP` : (hour === OOP_HOUR ? "✦ out of protection" : `+${hour - OOP_HOUR}h post-OOP`)}`;
+    }
+  }
 
   /* ───────── wallet (read straight off the post-instant-action row) ───────── */
   // Row H is the POST-instant-action state A_H (the engine replays hour H's instant actions
@@ -342,7 +408,18 @@ export function createEditor(deps) {
     mutableActs().push(a);
     deps.recompute(hour).then(render);
   }
-  function removeAt(i) { deps.recordUndo("edit"); mutableActs().splice(i, 1); deps.recompute(hour).then(render); }
+  function removeAt(i) {
+    const a = acts()[i];
+    deps.recordUndo("edit");
+    if (a && a.type === "improve" && a.auto) {
+      // a rule-derived invest would return next recompute — removing it means "skip this hour"
+      const target = Object.keys(a.data || {})[0];
+      const rule = (plan().autoInvest || []).find((r) => r.resource === a.resource && r.target === target && (r.from | 0) <= hour && hour <= (r.until | 0));
+      if (rule) { rule.skip = rule.skip || []; if (!rule.skip.includes(hour)) rule.skip.push(hour); }
+      else mutableActs().splice(i, 1);
+    } else mutableActs().splice(i, 1);
+    deps.recompute(hour).then(render);
+  }
   // Inline-edit a queued action's quantity straight from the QUEUED list — same commit path as
   // adding (snapshot for undo → mutate → re-simulate → re-render). Seamless: no delete-and-re-add.
   function editQty(i, key, raw) {
@@ -391,7 +468,9 @@ export function createEditor(deps) {
       case "train": return { desc: `train ${typeof a.slot === "string" ? a.slot : "slot " + a.slot}`, edit: { key: "n", val: a.n }, kind: "k-build" };
       case "release": return { desc: `release ${a.unit === "draftees" ? "draftees" : "slot " + a.slot}`, edit: { key: "n", val: a.n }, kind: "k-demob" };
       case "bank": return { desc: `bank ${(a.source || "").replace("resource_", "")}→${(a.target || "").replace("resource_", "")}`, edit: { key: "amount", val: a.amount } };
-      case "improve": return { desc: `invest ${a.resource} → ${improveTargets(a) || "castle improvements"}`, edit: null };
+      case "improve": return a.auto
+        ? { desc: `⚡ invest all ${a.resource} → ${Object.keys(a.data || {})[0] || "?"}`, edit: null }
+        : { desc: `invest ${a.resource} → ${improveTargets(a) || "castle improvements"}`, edit: null };
       case "draft_rate": return { desc: "draft rate", edit: { key: "rate", val: a.rate, unit: "%" } };
       case "spell": return { desc: `cast ${bld(a.spell)}`, edit: null };
       case "research": { const t = (meta().techs || []).find((x) => x.key === a.tech); return { desc: `research ${t ? t.name : bld(a.tech)}`, edit: null }; }
@@ -628,6 +707,31 @@ export function createEditor(deps) {
     return refresh;
   }
 
+  // A lane chip: the label button focuses the lane, the ⊞ button pins it visible beside the
+  // focused one. Two SIBLINGS, never nested (nested buttons are invalid HTML and unreachable by
+  // keyboard) — so the pin is tab-focusable and reports its state via aria-pressed.
+  const laneChip = (key, label, attr) =>
+    `<span class="bld-chipwrap"><button type="button" class="bld-chip" ${attr}="${esc(key)}">${esc(label)}</button>` +
+    `<button type="button" class="chip-pin" data-pin="${esc(key)}" aria-pressed="false" aria-label="pin ${esc(label)} lane" title="pin ${esc(label)} — keep this lane visible beside the focused one">⊞</button></span>`;
+  // Wire a tab's chips: label → focus that lane, ⊞ → toggle its pin. Both remount the window.
+  const wireLaneChips = (host, pins, onFocus, sync) => {
+    host.querySelectorAll(".bld-chip").forEach((ch) => (ch.onclick = () => { onFocus(ch); sync(); }));
+    host.querySelectorAll(".chip-pin").forEach((p) => (p.onclick = () => {
+      const k = p.dataset.pin;
+      pins.has(k) ? pins.delete(k) : pins.add(k);
+      sync();
+    }));
+  };
+  // Reflect focus (.on) + pin (.pinned / aria-pressed) state onto a tab's chips.
+  const syncLaneChips = (host, isFocused, pins) => {
+    host.querySelectorAll(".bld-chip").forEach((x) => x.classList.toggle("on", isFocused(x)));
+    host.querySelectorAll(".chip-pin").forEach((p) => {
+      const on = pins.has(p.dataset.pin);
+      p.setAttribute("aria-pressed", on ? "true" : "false");
+      const wrap = p.closest(".bld-chipwrap");
+      if (wrap) wrap.classList.toggle("pinned", on);
+    });
+  };
   const numField = (id, label, val, color) => `<label class="ed-field"><span>${label}</span><input id="${id}" type="number" inputmode="numeric" value="${val}" ${color ? `style="--c:var(${color})"` : ""}></label>`;
   const selField = (id, label, opts) => `<label class="ed-field"><span>${label}</span><select id="${id}">${opts}</select></label>`;
   const v = (id) => { const e = document.getElementById(id); return e ? e.value : null; };
@@ -643,6 +747,7 @@ export function createEditor(deps) {
   function renderForm(w) {
     const c = entryRow().costs;
     const free = entryRow().freeLandByType;
+    remountWindow = null; // grid tabs re-register their mount below; form-only views recenter via open()
     // Reset the reverse-mode tint each render; the destroy/release branches re-apply it.
     const edFormEl = document.getElementById("edForm");
     edFormEl.classList.remove("mode-danger", "mode-demob", "mode-event");
@@ -664,27 +769,37 @@ export function createEditor(deps) {
         if (!buildings.includes(buildSel)) buildSel = buildings[0] || "home";
         const groups = LAND_TYPES.map((t) => [t, buildings.filter((b) => buildingLand(b) === t)]).filter(([, bs]) => bs.length);
         const picker = `<div class="bld-picker">${groups.map(([t, bs]) => `
-          <div class="bld-group"><span class="bld-gh">${t}</span><div class="bld-chips">${bs.map((b) => `<button type="button" class="bld-chip ${b === buildSel ? "on" : ""}" data-b="${b}">${b.replace(/_/g, " ")}</button>`).join("")}</div></div>`).join("")}</div>`;
+          <div class="bld-group"><span class="bld-gh">${t}</span><div class="bld-chips">${bs.map((b) => laneChip(b, b.replace(/_/g, " "), "data-b")).join("")}</div></div>`).join("")}</div>`;
         const host = document.getElementById("edForm");
         host.innerHTML = `${sw}${picker}<div class="ed-note" id="buildNote"></div><div class="ed-hg" id="edHg"></div>`;
-        const mountSel = () => {
+        const syncChips = () => syncLaneChips(host, (x) => x.dataset.b === buildSel, buildPins);
+        const laneOf = (b) => ({
+          key: b, label: b.replace(/_/g, " "), color: "--c-land",
+          read: (h) => laneRead(h, matchOf("construct", b)),
+          write: (h, val) => laneWrite(h, matchOf("construct", b), () => ({ type: "construct", building: b, n: val }), val),
+          maxAt: (h) => maxLaneAt(h, "construct", b),
+        });
+        const mountSel = (initialSel) => {
+          remountWindow = () => mountSel();
           const n = document.getElementById("buildNote");
           const discounted = entryRow().discountedLand || 0;
           const discountNote = discounted > 0 ? ` · next ${int(discounted)} acres cost ${Math.round((c.constructDiscountMultiplier || 1) * 100)}%` : "";
           if (n) n.textContent = `${int(c.constructPlat)} plat + ${int(c.constructLumber)} lumber normal cost${discountNote} · sits on ${buildingLand(buildSel)} land · 12h to build · type a count down the hours`;
+          const vis = visibleLaneKeys(buildings, buildSel, buildPins, "construct");
           mountHourGrid(document.getElementById("edHg"), windowOpts({
-            label: buildSel.replace(/_/g, " "), color: "--c-land", stateCols: buildStateCols,
-            read: (h) => laneRead(h, (a) => a.type === "construct" && a.building === buildSel),
-            write: (h, val) => laneWrite(h, (a) => a.type === "construct" && a.building === buildSel, () => ({ type: "construct", building: buildSel, n: val }), val),
-            maxAt: (h) => maxLaneAt(h, "construct", buildSel),
+            lanes: vis.map(laneOf), focusLane: buildSel,
+            // The grid reports WHICH HOUR the cursor crossed from — recenter there, or a click on
+            // another lane's hour 28 would drop the cursor back on the old focal hour and edit it.
+            onFocusLane: (key, h) => { buildSel = key; focusLaneAt(h); syncChips(); mountSel(); },
+            moveTargets: buildings.map((b) => ({ key: b, label: b.replace(/_/g, " ") })),
+            onMoveSpan: moveSpan("construct", (b, n) => ({ type: "construct", building: b, n }),
+              (b, sel) => { buildSel = b; syncChips(); mountSel(sel); }),
+            stateCols: vis.length >= 4 ? [SC.land, SC.plat, SC.dp] : buildStateCols,
+            initialSel,
           }));
         };
-        document.querySelectorAll(".bld-chip").forEach((ch) => (ch.onclick = () => {
-          buildSel = ch.dataset.b;
-          document.querySelectorAll(".bld-chip").forEach((x) => x.classList.toggle("on", x === ch));
-          mountSel();
-        }));
-        mountSel();
+        wireLaneChips(host, buildPins, (ch) => { buildSel = ch.dataset.b; }, () => { syncChips(); mountSel(); });
+        syncChips(); mountSel();
       } else {
         // DESTROY — raze owned buildings to barren land (instant, free, undo-able).
         edFormEl.classList.add("mode-danger");
@@ -704,20 +819,32 @@ export function createEditor(deps) {
       // returns all 7 and ExploreActionService accepts land_<type> for any of them (cost is
       // land-total-based, not type-based). Don't pre-restrict the option set — offer all 7.
       const host = document.getElementById("edForm");
-      const chips = LAND_TYPES.map((t) => `<button type="button" class="bld-chip ${t === exploreSel ? "on" : ""}" data-t="${t}">${t}</button>`).join("");
+      const chips = LAND_TYPES.map((t) => laneChip(t, t, "data-t")).join("");
       host.innerHTML = `<div class="bld-group"><span class="bld-gh">explore — pick a land type</span><div class="bld-chips ed-terrain">${chips}</div></div><div class="ed-note" id="expNote"></div><div class="ed-hg" id="edHg"></div>`;
-      const mountSel = () => {
+      const syncChips = () => syncLaneChips(host, (x) => x.dataset.t === exploreSel, explorePins);
+      const laneOf = (t) => ({
+        key: t, label: t, color: "--c-draftee",
+        read: (h) => laneRead(h, matchOf("explore", t)),
+        write: (h, val) => laneWrite(h, matchOf("explore", t), () => ({ type: "explore", land: t, n: val }), val),
+        maxAt: (h) => maxLaneAt(h, "explore", t),
+      });
+      const mountSel = (initialSel) => {
+        remountWindow = () => mountSel();
         const n = document.getElementById("expNote");
         if (n) n.textContent = `${int(c.explorePlat)} plat + ${int(c.exploreDraftee)} draftees per acre · arrives in 12h as ${exploreSel} (skips a rezone) · costs morale · type acres down the hours`;
+        const vis = visibleLaneKeys(LAND_TYPES, exploreSel, explorePins, "explore");
         mountHourGrid(document.getElementById("edHg"), windowOpts({
-          label: exploreSel, color: "--c-draftee", stateCols: spendStateCols,
-          read: (h) => laneRead(h, (a) => a.type === "explore" && (a.land || "plain") === exploreSel),
-          write: (h, val) => laneWrite(h, (a) => a.type === "explore" && (a.land || "plain") === exploreSel, () => ({ type: "explore", land: exploreSel, n: val }), val),
-          maxAt: (h) => maxLaneAt(h, "explore", exploreSel),
+          lanes: vis.map(laneOf), focusLane: exploreSel,
+          onFocusLane: (key, h) => { exploreSel = key; focusLaneAt(h); syncChips(); mountSel(); },
+          moveTargets: LAND_TYPES.map((t) => ({ key: t, label: t })),
+          onMoveSpan: moveSpan("explore", (t, n) => ({ type: "explore", land: t, n }),
+            (t, sel) => { exploreSel = t; syncChips(); mountSel(sel); }),
+          stateCols: vis.length >= 4 ? [SC.land, SC.plat, SC.dp] : spendStateCols,
+          initialSel,
         }));
       };
-      host.querySelectorAll(".bld-chip").forEach((ch) => (ch.onclick = () => { exploreSel = ch.dataset.t; host.querySelectorAll(".bld-chip").forEach((x) => x.classList.toggle("on", x === ch)); mountSel(); }));
-      mountSel();
+      wireLaneChips(host, explorePins, (ch) => { exploreSel = ch.dataset.t; }, () => { syncChips(); mountSel(); });
+      syncChips(); mountSel();
     } else if (tab === "train") {
       // Train|Release directional switch — release is the inverse of train (units → draftees →
       // peasants), one flip away instead of buried in Manage.
@@ -732,30 +859,46 @@ export function createEditor(deps) {
           ["wizards", "Wizard"], ["archmages", "Archmage"],
         ]) if (c.train && c.train[slot]) units.push({ slot, name });
         if (!units.some((u) => String(u.slot) === String(trainSel))) trainSel = units[0] ? units[0].slot : 1;
-        const chips = units.map((u) => `<button type="button" class="bld-chip ${String(u.slot) === String(trainSel) ? "on" : ""}" data-s="${u.slot}">${u.name}</button>`).join("");
+        const slotOf = (key) => (/^\d+$/.test(key) ? +key : key);
+        const nameOf = (key) => (units.find((u) => String(u.slot) === String(key)) || {}).name || ("slot " + key);
+        const chips = units.map((u) => laneChip(String(u.slot), u.name, "data-s")).join("");
         const host = document.getElementById("edForm");
         host.innerHTML = `${sw}<div class="bld-group"><span class="bld-gh">train — pick a unit</span><div class="bld-chips ed-terrain">${chips}</div></div><div class="ed-note" id="trainNote"></div><div class="ed-hg" id="edHg"></div>`;
-        const mountSel = () => {
+        const syncChips = () => syncLaneChips(host, (x) => String(x.dataset.s) === String(trainSel), trainPins);
+        const laneOf = (key) => ({
+          key: String(key), label: nameOf(key), color: "--c-dp",
+          read: (h) => laneRead(h, matchOf("train", key)),
+          write: (h, val) => laneWrite(h, matchOf("train", key), () => ({ type: "train", slot: slotOf(String(key)), n: val }), val),
+          maxAt: (h) => maxLaneAt(h, "train", key),
+        });
+        const mountSel = (initialSel) => {
+          remountWindow = () => mountSel();
           const t = c.train[trainSel] || {};
           const n = document.getElementById("trainNote");
           if (n) n.textContent = `${Object.entries(t).map(([res, per]) => `${int(per)} ${res}`).join(" + ") || "—"} each · covert/magic units and draftees are NOT counted toward the DP target · type counts down the hours`;
-          // State columns track what THIS unit actually spends: platinum, its secondary cost resource
-          // (ore / lumber / mana / gems — whichever this race's unit costs, if any), then draftees + DP.
+          // State columns track what the FOCUSED unit actually spends: platinum, its secondary cost
+          // resource (ore / lumber / mana / gems — whichever this race's unit costs, if any), then
+          // draftees + DP.
           const sc = [SC.plat];
           for (const res of ["ore", "lumber", "mana", "gems"]) if ((t[res] || 0) > 0) sc.push(SC[res]);
           if ((t.draftees || 0) > 0) sc.push(SC.draft);
           if ((t.spies || 0) > 0) sc.push(SC.spies);
           if ((t.wizards || 0) > 0) sc.push(SC.wizards);
           sc.push(SC.dp);
+          const uniKeys = units.map((u) => String(u.slot));
+          const vis = visibleLaneKeys(uniKeys, String(trainSel), trainPins, "train");
           mountHourGrid(document.getElementById("edHg"), windowOpts({
-            label: (units.find((u) => String(u.slot) === String(trainSel)) || {}).name || ("slot " + trainSel), color: "--c-dp", stateCols: sc,
-            read: (h) => laneRead(h, (a) => a.type === "train" && String(a.slot) === String(trainSel)),
-            write: (h, val) => laneWrite(h, (a) => a.type === "train" && String(a.slot) === String(trainSel), () => ({ type: "train", slot: trainSel, n: val }), val),
-            maxAt: (h) => maxLaneAt(h, "train", trainSel),
+            lanes: vis.map(laneOf), focusLane: String(trainSel),
+            onFocusLane: (key, h) => { trainSel = slotOf(key); focusLaneAt(h); syncChips(); mountSel(); },
+            moveTargets: units.map((u) => ({ key: String(u.slot), label: u.name })),
+            onMoveSpan: moveSpan("train", (key, n) => ({ type: "train", slot: slotOf(String(key)), n }),
+              (key, sel) => { trainSel = slotOf(key); syncChips(); mountSel(sel); }),
+            stateCols: vis.length >= 4 ? [SC.plat, SC.draft, SC.dp] : sc,
+            initialSel,
           }));
         };
-        host.querySelectorAll(".bld-chip").forEach((ch) => (ch.onclick = () => { const x = ch.dataset.s; trainSel = /^\d+$/.test(x) ? +x : x; host.querySelectorAll(".bld-chip").forEach((y) => y.classList.toggle("on", y === ch)); mountSel(); }));
-        mountSel();
+        wireLaneChips(host, trainPins, (ch) => { trainSel = slotOf(ch.dataset.s); }, () => { syncChips(); mountSel(); });
+        syncChips(); mountSel();
       } else {
         // RELEASE — disband units → draftees, draftees → peasants (instant, free, undo-able).
         edFormEl.classList.add("mode-demob");
@@ -888,112 +1031,130 @@ export function createEditor(deps) {
     balance();
   }
 
-  // ───────── Castle improvements ("Imps") — the live game accepts one resource
-  // and a multi-row allocation in a single instant action. The row contract carries
-  // exact race + researched-tech multipliers from Rust; mana is hero-gated and omitted. ─────────
+  // ───────── Castle improvements ("Imps") — one resource × improvement lane over the hour
+  // window, plus standing auto-invest rules ("all gems → keep, h24–h49") that syncAutoInvest
+  // expands into exact per-hour invest actions. The row contract carries exact race + tech
+  // multipliers from Rust; mana is hero-gated and omitted. ─────────
+  const impRuleAt = (h) => (plan().autoInvest || []).find((r) =>
+    r.resource === improveResource && r.target === improveTarget && (r.from | 0) <= h && h <= (r.until | 0));
+  // A new rule's end hour, RESOLVED at creation against the current action horizon. Storing a bare
+  // OOP_HOUR (49) on a default 48-hour plan would sit outside the horizon: syncAutoInvest clamps to
+  // the plan length, so the rule bar would advertise an hour it never reaches — and later extending
+  // the post-OOP window would silently switch that hour on. Resolving now keeps the stored end hour
+  // and the actual behavior identical, whatever happens to the horizon afterwards.
+  const autoInvestUntil = () => Math.min(OOP_HOUR, plan().hours.length);
   function renderImprovements() {
     const host = document.getElementById("edForm");
-    const row = entryRow();
-    const state = row.improvements || {};
     const wallet = remainingWallet();
     const resource = IMPROVEMENT_RESOURCES.find((item) => item.key === improveResource) || IMPROVEMENT_RESOURCES[0];
     improveResource = resource.key;
-    const available = Math.floor(wallet[resource.key] || 0);
-    const spendable = Math.max(0, available);
-    const pct = (n) => {
-      const value = Number(n) || 0;
-      return `${value.toFixed(2).replace(/\.00$/, "").replace(/(\.\d)0$/, "$1")}%`;
-    };
-    const bonusText = (imp, info) => {
-      if (imp.key === "harbor") return `+${pct(info.bonusPct)} food · +${pct(info.secondaryBonusPct)} boats`;
-      return `+${pct(info.bonusPct)}`;
-    };
-    const resources = IMPROVEMENT_RESOURCES.map((item) => `
-      <button type="button" class="imp-resource ${item.key === resource.key ? "on" : ""}" data-resource="${item.key}" aria-pressed="${item.key === resource.key}">
-        <span>${item.key}</span><small>${item.worth} ${item.worth === 1 ? "point" : "points"} each · ${int(wallet[item.key] || 0)} available</small>
-      </button>`).join("");
-    const rows = IMPROVEMENTS.map((imp) => {
-      const info = state[imp.key] || {};
-      const multiplier = Number((info.multipliers || {})[resource.key]) || 1;
-      const rate = resource.worth * multiplier;
-      const rateLabel = Math.abs(rate - Math.round(rate)) < 0.0001 ? int(rate) : rate.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
-      return `<tr>
-        <td class="imp-name"><b>${imp.label}</b><span>${imp.effect}</span></td>
-        <td class="imp-current"><b>${int(info.points || 0)}</b><span>points</span></td>
-        <td class="imp-bonus">${bonusText(imp, info)}</td>
-        <td class="imp-entry"><input class="imp-input" type="number" min="0" step="1" inputmode="numeric" data-improvement="${imp.key}" value="" placeholder="0" aria-label="${resource.key} to invest in ${imp.label}"><button class="imp-max" type="button" data-max="${imp.key}">max</button></td>
-        <td class="imp-gain" data-gain="${imp.key}"><b>+0</b><span>points · ${rateLabel} per ${resource.key === "gems" ? "gem" : resource.key}</span></td>
-      </tr>`;
-    }).join("");
+    if (!IMPROVEMENTS.some((i) => i.key === improveTarget)) improveTarget = "keep";
+    const rules = plan().autoInvest || [];
+    const hh = String(hour).padStart(2, "0");
+    const resChips = IMPROVEMENT_RESOURCES.map((item) =>
+      `<button type="button" class="bld-chip ${item.key === improveResource ? "on" : ""}" data-res="${item.key}">${item.key} <i class="chip-sub">${int(wallet[item.key] || 0)}</i></button>`).join("");
+    const impChips = IMPROVEMENTS.map((imp) =>
+      `<button type="button" class="bld-chip ${imp.key === improveTarget ? "on" : ""}" data-imp="${imp.key}" title="${esc(imp.effect)}">${imp.label}</button>`).join("");
+    const ruleBars = rules.map((r, i) => `<div class="iv-rule">
+        <span class="iv-bolt">⚡</span><span class="iv-cap">auto-invest all</span>
+        <b class="iv-res">${esc(r.resource)}</b><span class="iv-arrow">→</span><b class="iv-tgt">${esc(r.target)}</b>
+        <label class="iv-l">from h<input class="iv-h" type="text" inputmode="numeric" data-i="${i}" data-k="from" value="${r.from | 0}"></label>
+        <label class="iv-l">until h<input class="iv-h" type="text" inputmode="numeric" data-i="${i}" data-k="until" value="${r.until | 0}"></label>
+        ${(r.skip || []).length ? `<span class="iv-skip">${(r.skip || []).length} hr override</span>` : ""}
+        <button type="button" class="iv-x" data-i="${i}" aria-label="remove rule">✕</button>
+      </div>`).join("");
+    // "Invest ALL of a resource" is exclusive: two rules on the same resource would both claim the
+    // whole stock, the first consuming it and the rest silently investing nothing. So there is at
+    // most ONE rule per resource — picking a different improvement RETARGETS it rather than
+    // stacking a dead second rule.
+    const resourceRule = rules.find((r) => r.resource === improveResource);
+    const hasRule = !!resourceRule && resourceRule.target === improveTarget;
+    const retarget = !!resourceRule && resourceRule.target !== improveTarget;
+    const addLabel = retarget
+      ? `⚡ retarget ${esc(improveResource)} → ${esc(improveTarget)} (replaces ${esc(resourceRule.target)})`
+      : `⚡ auto-invest all ${esc(improveResource)} → ${esc(improveTarget)} from h${hh} until h${String(autoInvestUntil()).padStart(2, "0")}`;
     host.innerHTML = `
-      <div class="imp-head"><div><span class="imp-kicker">Castle improvements</span><h3>Invest resources across your castle</h3></div><div class="imp-wallet"><b>${int(available)}</b><span>${resource.key} available now</span></div></div>
-      <div class="imp-resources" role="group" aria-label="investment resource">${resources}</div>
-      <table class="imp-table">
-        <thead><tr><th>improvement</th><th>current</th><th>current bonus</th><th>invest ${resource.key}</th><th>points gained</th></tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
-      <div class="imp-summary"><span><b id="impTotal">0</b> ${resource.key} allocated</span><span><b id="impRemaining">${int(available)}</b> remaining</span></div>
-      <div class="ed-feedback" id="edFb"></div>
-      <button class="ed-add" id="edAdd" type="button">invest ${resource.key}</button>
-      <div class="ed-note">Instant. Gems are worth 12 points each; lumber and ore 2; platinum 1. Race perks and researched tech bonuses are included. Mana is unavailable because mana investment requires a hero perk, and OVERTURE does not model heroes. Wonders are also outside the simulation.</div>`;
-
-    const inputs = [...host.querySelectorAll(".imp-input")];
-    const read = () => Object.fromEntries(inputs.map((input) => [input.dataset.improvement, Math.max(0, Math.floor(+input.value || 0))]));
-    const action = () => {
-      const data = Object.fromEntries(Object.entries(read()).filter(([, amount]) => amount > 0));
-      const amount = Object.values(data).reduce((sum, n) => sum + n, 0);
-      return { type: "improve", resource: resource.key, data, amount };
-    };
-    const refresh = () => {
-      const allocation = read();
-      const total = Object.values(allocation).reduce((sum, n) => sum + n, 0);
-      let pointTotal = 0;
-      for (const imp of IMPROVEMENTS) {
-        const info = state[imp.key] || {};
-        const multiplier = Number((info.multipliers || {})[resource.key]) || 1;
-        const points = Math.floor(allocation[imp.key] * resource.worth * multiplier);
-        pointTotal += points;
-        const cell = host.querySelector(`[data-gain="${imp.key}"] b`);
-        if (cell) cell.textContent = `+${int(points)}`;
+      <div class="bld-picker">
+        <div class="bld-group"><span class="bld-gh">invest — pick a resource</span><div class="bld-chips ed-terrain">${resChips}</div></div>
+        <div class="bld-group"><span class="bld-gh">into an improvement</span><div class="bld-chips ed-terrain">${impChips}</div></div>
+      </div>
+      <div class="iv-rules">${ruleBars}${hasRule ? "" : `<button type="button" class="iv-add" id="ivAdd">${addLabel}</button>`}</div>
+      <div class="ed-hg" id="edHg"></div>`;
+    const impMatch = (a) => a.type === "improve" && !a.auto && a.resource === improveResource;
+    const manualAt = (h) => (plan().hours[h - 1] || []).filter(impMatch).reduce((s, a) => s + (((a.data || {})[improveTarget]) | 0), 0);
+    function impWrite(h, v, raw) {
+      const list = plan().hours[h - 1] || (plan().hours[h - 1] = []);
+      const rule = impRuleAt(h);
+      const cleared = raw == null || String(raw).trim() === "";
+      // Strip this lane's key from EVERY matching action, not just the first: the cell's displayed
+      // value sums them all (an imported or hand-edited plan may hold several same-resource invests
+      // in one hour), so clearing only the first would leave a remainder and the write would read
+      // back as an addition instead of a replacement.
+      for (const a of list.filter(impMatch)) {
+        const d = a.data || (a.data = {});
+        delete d[improveTarget];
+        a.amount = improveTotal(a);
       }
-      host.querySelector("#impTotal").textContent = int(total);
-      const remaining = available - total;
-      const remainingEl = host.querySelector("#impRemaining");
-      remainingEl.textContent = int(remaining);
-      remainingEl.closest("span").classList.toggle("neg", remaining < 0);
-      const add = host.querySelector("#edAdd"), fb = host.querySelector("#edFb");
-      if (total <= 0) {
-        add.disabled = true;
-        fb.innerHTML = `<span class="rz-dim">enter an amount beside one or more improvements</span>`;
-      } else if (total > spendable) {
-        add.disabled = true;
-        fb.innerHTML = `<span class="fb-bad">✕ ${resource.key} short by ${int(total - spendable)}</span>`;
-      } else {
-        add.disabled = false;
-        fb.innerHTML = `<span class="fb-ok">✓ ${int(total)} ${resource.key} → ${int(pointTotal)} improvement points · instant</span>`;
+      for (let ix = list.length - 1; ix >= 0; ix--) if (impMatch(list[ix]) && improveTotal(list[ix]) <= 0) list.splice(ix, 1);
+      if (rule) {
+        rule.skip = (rule.skip || []).filter((x) => x !== h);
+        if (v === 0 && !cleared) rule.skip.push(h); // typed 0 = override this hour; cleared = restore the rule
       }
+      if (v > 0) {
+        const again = list.find(impMatch);
+        if (again) { again.data[improveTarget] = v; again.amount = improveTotal(again); }
+        else list.push({ type: "improve", resource: improveResource, data: { [improveTarget]: v }, amount: v });
+      }
+    }
+    const impLane = {
+      key: `${improveResource}:${improveTarget}`, label: `${improveResource} → ${improveTarget}`, color: resource.color,
+      read: manualAt,
+      write: impWrite,
+      autoAt: (h) => {
+        const r = rowAt(h);
+        const act = ((r && r.actions) || []).find((a) => a.type === "improve" && a.auto && a.all && a.resource === improveResource && (a.data || {})[improveTarget] != null);
+        return act ? ((act.data || {})[improveTarget] | 0) : null;
+      },
+      zeroAt: (h) => { const r = impRuleAt(h); return !!(r && (r.skip || []).includes(h)); },
+      maxAt: (h) => {
+        const r = rowAt(h); if (!r || !r.costs) return { n: 0, why: "" };
+        const spent = ((r.actions) || []).filter((a) => a.type === "improve" && a.resource === improveResource).reduce((s, a) => s + improveTotal(a), 0);
+        return { n: Math.max(0, Math.floor(freshWallet(r)[improveResource] || 0) + spent), why: improveResource };
+      },
     };
-    host.querySelectorAll(".imp-resource").forEach((button) => (button.onclick = () => {
-      improveResource = button.dataset.resource;
-      renderImprovements();
-    }));
-    inputs.forEach((input) => {
-      input.oninput = () => { if (+input.value < 0) input.value = "0"; refresh(); };
-      input.onchange = refresh;
-    });
-    host.querySelectorAll(".imp-max").forEach((button) => (button.onclick = () => {
-      const allocation = read();
-      const current = allocation[button.dataset.max] || 0;
-      const total = Object.values(allocation).reduce((sum, n) => sum + n, 0);
-      const input = host.querySelector(`.imp-input[data-improvement="${button.dataset.max}"]`);
-      if (input) input.value = String(Math.max(0, spendable - (total - current)));
-      refresh();
-    }));
-    host.querySelector("#edAdd").onclick = () => {
-      const a = action();
-      if (a.amount > 0 && !applyOne(remainingWallet(), a, true)) commit(a);
+    const impStateCols = [
+      SC[{ platinum: "plat", lumber: "lumber", ore: "ore", gems: "gems" }[improveResource]],
+      { key: "pts", label: `${improveTarget} pts`, c: "--c-dp", get: (r) => (((r.improvements || {})[improveTarget]) || {}).points || 0 },
+      { key: "pct", label: "bonus", c: "--c-dp", get: (r) => (((r.improvements || {})[improveTarget]) || {}).bonusPct || 0, fmt: (v) => `${(+v).toFixed(2).replace(/\.00$/, "").replace(/(\.\d)0$/, "$1")}%` },
+    ];
+    const mountGrid = () => {
+      remountWindow = () => mountGrid();
+      mountHourGrid(document.getElementById("edHg"), windowOpts({
+        lanes: [impLane], focusLane: impLane.key, stateCols: impStateCols,
+      }));
     };
-    refresh();
+    mountGrid();
+    host.querySelectorAll("[data-res]").forEach((b) => (b.onclick = () => { improveResource = b.dataset.res; renderImprovements(); }));
+    host.querySelectorAll("[data-imp]").forEach((b) => (b.onclick = () => { improveTarget = b.dataset.imp; renderImprovements(); }));
+    const add = host.querySelector("#ivAdd");
+    if (add) add.onclick = () => {
+      deps.recordUndo("edit");
+      const p = plan(); p.autoInvest = p.autoInvest || [];
+      if (retarget) { resourceRule.target = improveTarget; resourceRule.skip = []; } // one rule per resource
+      else p.autoInvest.push({ resource: improveResource, target: improveTarget, from: hour, until: autoInvestUntil(), skip: [] });
+      deps.recompute(hour).then(render);
+    };
+    host.querySelectorAll(".iv-x").forEach((b) => (b.onclick = () => {
+      deps.recordUndo("edit");
+      plan().autoInvest.splice(+b.dataset.i, 1);
+      deps.recompute(hour).then(render);
+    }));
+    host.querySelectorAll(".iv-h").forEach((inp) => (inp.onchange = () => {
+      deps.recordUndo("edit");
+      const r = plan().autoInvest[+inp.dataset.i]; if (!r) return;
+      r[inp.dataset.k] = Math.max(1, Math.floor(+inp.value || 0));
+      deps.recompute(hour).then(render);
+    }));
   }
 
   // ───────── Magic — one card per self-spell, no dropdown. "keep up" maintains the spell from this
@@ -1453,6 +1614,30 @@ export function syncMaintainedSpells(plan) {
     const from = m[key] | 0;
     for (let h = 1; h <= N; h++) { const l = plan.hours[h - 1]; if (l && l.length) plan.hours[h - 1] = l.filter((a) => !(a.type === "spell" && a.spell === key)); }
     if (from >= 1) for (let h = from; h <= N; h += 12) (plan.hours[h - 1] || (plan.hours[h - 1] = [])).push({ type: "spell", spell: key });
+  }
+}
+
+// Auto-invest rules: plan.autoInvest = [{resource, target, from, until, skip:[hours]}] — a standing
+// "invest the resource's whole remaining stock into one improvement" policy. Like maintained spells,
+// the per-hour actions are DERIVED here on every recompute: stripped and re-laid so they always
+// track the current rules, plan length, and manual overrides. A manual improve action of the same
+// resource wins its hour; hours in `skip` are explicit zero overrides. The derived action carries
+// all:true — the engine resolves the exact invested amount from the live stock at execution, and
+// the row echo reports it — and auto:true so this sync owns it. Derived invests are appended LAST
+// in the hour, after the user's own actions, so banking/spending that hour is respected.
+export function syncAutoInvest(plan) {
+  if (!plan || !Array.isArray(plan.hours)) return;
+  const N = plan.hours.length;
+  for (let h = 1; h <= N; h++) { const l = plan.hours[h - 1]; if (l && l.length) plan.hours[h - 1] = l.filter((a) => !(a.type === "improve" && a.auto)); }
+  for (const r of (Array.isArray(plan.autoInvest) ? plan.autoInvest : [])) {
+    const from = Math.max(1, r.from | 0), until = Math.min(N, r.until | 0);
+    const skip = new Set((r.skip || []).map(Number));
+    for (let h = from; h <= until; h++) {
+      if (skip.has(h)) continue;
+      const list = plan.hours[h - 1] || (plan.hours[h - 1] = []);
+      if (list.some((a) => a.type === "improve" && !a.auto && a.resource === r.resource)) continue;
+      list.push({ type: "improve", resource: r.resource, data: { [r.target]: 0 }, amount: 0, all: true, auto: true });
+    }
   }
 }
 // First spendable resource / barren land type the row drives negative, as a short label.

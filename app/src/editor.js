@@ -769,10 +769,20 @@ export function createEditor(deps) {
         if (!buildings.includes(buildSel)) buildSel = buildings[0] || "home";
         const groups = LAND_TYPES.map((t) => [t, buildings.filter((b) => buildingLand(b) === t)]).filter(([, bs]) => bs.length);
         const picker = `<div class="bld-picker">${groups.map(([t, bs]) => `
-          <div class="bld-group"><span class="bld-gh">${t}</span><div class="bld-chips">${bs.map((b) => laneChip(b, b.replace(/_/g, " "), "data-b")).join("")}</div></div>`).join("")}</div>`;
+          <div class="bld-group"><span class="bld-gh">${t}<i class="bld-gh-n" data-bt="${t}"></i></span><div class="bld-chips">${bs.map((b) => laneChip(b, b.replace(/_/g, " "), "data-b")).join("")}</div></div>`).join("")}</div>`;
         const host = document.getElementById("edForm");
         host.innerHTML = `${sw}${picker}<div class="ed-note" id="buildNote"></div><div class="ed-hg" id="edHg"></div>`;
         const syncChips = () => syncLaneChips(host, (x) => x.dataset.b === buildSel, buildPins);
+        // Barren acres of each type remaining THIS hour (after its queued actions), beside the
+        // group word — negative means the hour overspends that land, shown red not hidden.
+        const syncBarren = () => {
+          const free = (entryRow() || {}).freeLandByType || {};
+          host.querySelectorAll(".bld-gh-n").forEach((e) => {
+            const n = Math.floor(free[e.dataset.bt] || 0);
+            e.textContent = n !== 0 ? `${int(n)} barren` : "";
+            e.classList.toggle("neg", n < 0);
+          });
+        };
         const laneOf = (b) => ({
           key: b, label: b.replace(/_/g, " "), color: "--c-land",
           read: (h) => laneRead(h, matchOf("construct", b)),
@@ -781,6 +791,7 @@ export function createEditor(deps) {
         });
         const mountSel = (initialSel) => {
           remountWindow = () => mountSel();
+          syncBarren();
           const n = document.getElementById("buildNote");
           const discounted = entryRow().discountedLand || 0;
           const discountNote = discounted > 0 ? ` · next ${int(discounted)} acres cost ${Math.round((c.constructDiscountMultiplier || 1) * 100)}%` : "";
@@ -795,6 +806,7 @@ export function createEditor(deps) {
             onMoveSpan: moveSpan("construct", (b, n) => ({ type: "construct", building: b, n }),
               (b, sel) => { buildSel = b; syncChips(); mountSel(sel); }),
             stateCols: vis.length >= 4 ? [SC.land, SC.plat, SC.dp] : buildStateCols,
+            afterCommit: () => { renderChrome(); syncBarren(); },
             initialSel,
           }));
         };

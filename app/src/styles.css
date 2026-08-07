@@ -376,6 +376,8 @@ select.field-input { text-transform: capitalize; cursor: pointer; }
 .bld-picker { display: flex; flex-direction: column; gap: 9px; margin-bottom: 12px; max-height: 40vh; overflow: auto; }
 .bld-group { display: flex; flex-direction: column; gap: 5px; }
 .bld-gh { font-size: 9px; letter-spacing: .18em; text-transform: uppercase; color: var(--c-land); font-weight: 600; }
+.bld-gh-n { font-style: normal; font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 9px; font-weight: 400; letter-spacing: 0; text-transform: none; color: var(--text-dim); margin-left: 8px; }
+.bld-gh-n.neg { color: var(--red); }
 .bld-chips { display: flex; flex-wrap: wrap; gap: 5px; }
 .bld-chip { background: var(--panel-3); border: 1px solid var(--line-strong); border-radius: 3px; color: var(--text-dim); font-family: var(--font-mono); font-size: 11px; padding: 4px 9px; cursor: pointer; text-transform: capitalize; }
 .bld-chip:hover { color: var(--text); border-color: var(--c-land); }

@@ -115,8 +115,9 @@ export function createEditor(deps) {
     wizards: { key: "wizards", label: "wiz", c: "--text-dim", get: (r) => (r.military || {}).wizards || 0 },
     dp: { key: "dp", label: "DP", c: "--c-dp", get: (r) => Math.round(r.trainedModded || 0) },
   };
-  const buildStateCols = [SC.land, SC.plat, SC.lumber, SC.dp];
-  const spendStateCols = [SC.land, SC.plat, SC.draft, SC.dp];
+  // Consequence columns per tab: each lane's ACTUAL spends. DP belongs to the Train tab only.
+  const buildStateCols = [SC.land, SC.plat, SC.lumber];
+  const spendStateCols = [SC.land, SC.plat, SC.draft];
   // Read/upsert one lane's quantity in a given hour's action list (match recognizes the lane's actions,
   // make(n) builds a fresh one) — the embedded window's cell read/write.
   const laneRead = (h, match) => (plan().hours[h - 1] || []).filter(match).reduce((s, a) => s + (a.n | 0), 0);
@@ -805,7 +806,7 @@ export function createEditor(deps) {
             moveTargets: buildings.map((b) => ({ key: b, label: b.replace(/_/g, " ") })),
             onMoveSpan: moveSpan("construct", (b, n) => ({ type: "construct", building: b, n }),
               (b, sel) => { buildSel = b; syncChips(); mountSel(sel); }),
-            stateCols: vis.length >= 4 ? [SC.land, SC.plat, SC.dp] : buildStateCols,
+            stateCols: buildStateCols,
             afterCommit: () => { renderChrome(); syncBarren(); },
             initialSel,
           }));
@@ -851,7 +852,7 @@ export function createEditor(deps) {
           moveTargets: LAND_TYPES.map((t) => ({ key: t, label: t })),
           onMoveSpan: moveSpan("explore", (t, n) => ({ type: "explore", land: t, n }),
             (t, sel) => { exploreSel = t; syncChips(); mountSel(sel); }),
-          stateCols: vis.length >= 4 ? [SC.land, SC.plat, SC.dp] : spendStateCols,
+          stateCols: spendStateCols,
           initialSel,
         }));
       };

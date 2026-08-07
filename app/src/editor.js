@@ -916,12 +916,17 @@ export function createEditor(deps) {
         edFormEl.classList.add("mode-demob");
         const r = entryRow(), m = r.military || {};
         const units = [["draftees", `draftees (${int(r.draftees)})`], ["1", `slot 1 (${int(m.u1 || 0)})`], ["2", `slot 2 (${int(m.u2 || 0)})`], ["3", `slot 3 (${int(m.u3 || 0)})`], ["4", `slot 4 (${int(m.u4 || 0)})`]];
-        mountForm(
-          `${sw}<div class="ed-grid2">${selField("p1", "release", units.map(([k, l]) => `<option value="${k}">${l}</option>`).join(""))}${numField("p2", "count", 10, "--c-draftee")}</div>
+        // The count defaults to EVERYTHING the selected pool holds this hour ("release all" is
+        // the common move); picking a different pool re-defaults to its own total.
+        const releasable = { draftees: Math.max(0, r.draftees | 0), 1: Math.max(0, m.u1 | 0), 2: Math.max(0, m.u2 | 0), 3: Math.max(0, m.u3 | 0), 4: Math.max(0, m.u4 | 0) };
+        const refreshRelease = mountForm(
+          `${sw}<div class="ed-grid2">${selField("p1", "release", units.map(([k, l]) => `<option value="${k}">${l}</option>`).join(""))}${numField("p2", "count", releasable.draftees, "--c-draftee")}</div>
            <div class="ed-note">units → draftees, draftees → peasants · instant, free · undo-able</div>`,
           () => { const u = v("p1"); return u === "draftees" ? { type: "release", unit: "draftees", n: vn("p2") } : { type: "release", slot: +u, n: vn("p2") }; },
           { verb: "release troops", qtyField: "p2", variant: "demob", note: (a) => `release ${int(a.n)} ${a.unit === "draftees" ? "draftees → peasants" : "slot " + a.slot + " → draftees"}` }
         );
+        const relSel = document.getElementById("p1");
+        if (relSel) relSel.onchange = () => { const f = document.getElementById("p2"); if (f) f.value = String(releasable[relSel.value] ?? 0); refreshRelease(); };
       }
       wireDirSwitch((d) => { trainDir = d; renderForm(w); });
     } else if (tab === "imps") {

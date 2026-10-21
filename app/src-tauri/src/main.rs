@@ -287,6 +287,7 @@ fn ruleset_json() -> Value {
         "sourceTag": ruleset.source_tag,
         "sourceCommit": ruleset.source_commit,
         "productionOverrides": ruleset.production_overrides,
+        "roundPerks": ruleset.round_perks,
     })
 }
 
@@ -572,6 +573,8 @@ fn simulate(plan: Value) -> Result<Value, String> {
         // the pre-tick point run() itself skips; plan.rs/golden are untouched.)
         let entering = &states[state_idx(h)];
         let mut disp = entering.clone();
+        // An empty hour still crosses round-day perk boundaries.
+        disp.round_day = round_day;
         // Engine-shaped actions for hour H (already reshaped in build_scenario): protection hours
         // are sc.ticks[h-1]; the OOP hour (P+1) and post-OOP hours are sc.post_oop_ticks[h-P-1].
         let acts_h: &[Value] = if h == 0 {
@@ -670,8 +673,10 @@ fn simulate(plan: Value) -> Result<Value, String> {
     } else {
         states.len() - 1
     };
+    let mut oop_state = states[oop_idx].clone();
+    oop_state.round_day = plan::round_day_for_hour(sc.days_late, oop_hour as i64);
     let last = row_json(
-        &states[oop_idx],
+        &oop_state,
         oop_hour as i64,
         plan::round_day_for_hour(sc.days_late, oop_hour as i64),
         json!([]),
@@ -1239,6 +1244,56 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running OVERTURE");
+}
+
+#[cfg(test)]
+mod round_perk_tests {
+    use super::*;
+
+    #[test]
+    fn late_start_rows_and_investments_follow_round_perk_day_boundaries() {
+        let mut hours = vec![json!([]); 48];
+        hours[25] = json!([
+            { "type": "improve", "resource": "platinum", "data": { "keep": 100 } }
+        ]);
+        let out = simulate(json!({
+            "race": "human",
+            "daysLate": 17,
+            "opening": { "home": 200, "farm": 150 },
+            "hours": hours
+        }))
+        .expect("late-start simulation");
+        let rows = &out["rows"];
+        assert_eq!(rows[24]["roundDay"], 18);
+        assert_eq!(rows[25]["roundDay"], 19);
+        assert_eq!(
+            rows[24]["improvements"]["keep"]["multipliers"]["platinum"],
+            1.1
+        );
+        assert_eq!(
+            rows[25]["improvements"]["keep"]["multipliers"]["platinum"],
+            1.05
+        );
+        assert_eq!(rows[25]["improvements"]["keep"]["points"], 0);
+        assert_eq!(rows[26]["improvements"]["keep"]["points"], 105);
+        assert_eq!(rows[27]["improvements"]["keep"]["points"], 105);
+    }
+
+    #[test]
+    fn normal_protection_does_not_apply_live_round_perks() {
+        let out = simulate(json!({
+            "race": "human",
+            "opening": { "home": 200, "farm": 150 },
+            "hours": vec![json!([]); 48]
+        }))
+        .expect("normal protection simulation");
+        assert_eq!(
+            out["rows"][1]["improvements"]["keep"]["multipliers"]["platinum"],
+            1.0
+        );
+        assert_eq!(out["ruleset"]["round"], 52);
+        assert_eq!(out["ruleset"]["roundPerks"].as_array().unwrap().len(), 3);
+    }
 }
 
 #[cfg(test)]

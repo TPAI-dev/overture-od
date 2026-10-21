@@ -22,14 +22,11 @@ const PLAIN_OK = ["home", "alchemy", "farm", "smithy", "masonry"];
 const LAND_TYPES = ["plain", "swamp", "hill", "mountain", "forest", "cavern", "water"];
 const OOP_HOUR = 49; // hour 49 = out of protection; events begin here
 const RULESET = {
-  id: "round51",
-  round: 51,
-  sourceTag: "1.51.0",
-  sourceCommit: "35b977df6b47fd24636f920657b5c4edb46bbff7",
-  productionOverrides: {
-    arcaneInfusionPlatinum: "1400: developer-confirmed live production value on 2026-07-31; the 1.51.0 tag still contains the stale 1350 value",
-    sylvanCentaurPlatinum: "950: developer-confirmed live production value on 2026-07-31; the 1.51.0 tag still contains the stale 970 value",
-  },
+  id: "round52",
+  round: 52,
+  sourceTag: "1.52.0",
+  sourceCommit: "e7d3db4268ed176674a7fba44188b95d8c554595",
+  productionOverrides: {},
 };
 // Human units: preview-only stats plus exact invasion return hours.
 const UNIT = {

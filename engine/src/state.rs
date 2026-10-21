@@ -102,6 +102,15 @@ pub struct DominionState {
     pub protection_ticks: i64,
     pub protection_ticks_remaining: i64,
     pub protection_finished: bool,
+    /// Current round day for calendar-scoped round perks.
+    #[serde(default)]
+    pub round_day: i64,
+    /// Normal registration plays protection before round start; late starts do not.
+    #[serde(default)]
+    pub round_started: bool,
+    /// None uses the live ruleset; an explicit list pins oracle/what-if context.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub round_perks: Option<Vec<crate::data::RoundPerk>>,
     pub daily_platinum: bool,
     pub daily_land: bool,
 

@@ -468,7 +468,7 @@ function setModeBadge() {
   if (engine.live) {
     b.className = "mode-badge engine";
     b.textContent = "● BIT-EXACT ENGINE";
-    b.title = "Running the real game engine compiled from the pinned round-51 ruleset.";
+    b.title = "Running the real game engine compiled from the ruleset shown beside this badge.";
   } else {
     b.className = "mode-badge mock";
     b.textContent = "⚠ MOCK PREVIEW — NOT GAME-ACCURATE";

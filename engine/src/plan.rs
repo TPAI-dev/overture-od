@@ -32,10 +32,30 @@ pub struct Scenario {
     pub post_oop_ticks: Vec<Vec<Value>>,
     #[serde(rename = "daysLate", default)]
     pub days_late: i64,
+    /// Oracle round clock (`Round.start_date` relative to the run, e.g. "+3 days"
+    /// or "-1 days"). When present the scenario pins its own round: a past start
+    /// means the round has started from creation, and the embedded ruleset's
+    /// round perks are replaced by `roundPerks` (or none).
+    #[serde(rename = "roundStart", default)]
+    pub round_start: Option<String>,
+    /// Round perks the oracle inserted for its round (see `data::RoundPerk`).
+    #[serde(rename = "roundPerks", default)]
+    pub round_perks: Option<Vec<data::RoundPerk>>,
 }
 
 pub fn start_state(sc: &Scenario) -> DominionState {
-    config::start_state(&sc.protection_type, sc.days_late, &sc.race)
+    let mut s = config::start_state(&sc.protection_type, sc.days_late, &sc.race);
+    if sc.round_start.is_some() || sc.round_perks.is_some() {
+        s.round_perks = Some(sc.round_perks.clone().unwrap_or_default());
+        if sc
+            .round_start
+            .as_deref()
+            .is_some_and(|start| start.trim_start().starts_with('-'))
+        {
+            s.round_started = true;
+        }
+    }
+    s
 }
 
 /// Current round day for an OVERTURE hour. Hour 1 starts day 1, with the daily
@@ -73,6 +93,7 @@ pub fn run_with_events(
 
     for (index, actions) in sc.ticks.iter().enumerate() {
         let round_day = round_day_for_hour(sc.days_late, index as i64 + 1);
+        s.round_day = round_day;
         for a in actions {
             apply_action_at_round_day(&mut s, a, round_day);
         }
@@ -85,13 +106,11 @@ pub fn run_with_events(
     // OR a post-OOP window to follow; with no post-OOP window the condition reduces to the
     // old `!oop_actions.is_empty()`, so existing callers are byte-identical.
     if !sc.oop_actions.is_empty() || !sc.post_oop_ticks.is_empty() || !events.is_empty() {
-        // Out of protection from here on. The oracle flips protection_finished at the final
-        // protection tick (remaining→0) for advanced dominions; we set it at the boundary,
-        // which is observationally identical (protection_finished is cast/display-only — never
-        // a compared golden FIELD, and calc/tick never read it). This gates `invalid_protection`
-        // racial spells: refused under protection, castable now (e.g. Undead Death and Decay).
+        // Out of protection from here on: enable racial spells that require OOP
+        // and the live round perks before applying this boundary's actions.
         s.protection_finished = true;
         let round_day = round_day_for_hour(sc.days_late, sc.ticks.len() as i64 + 1);
+        s.round_day = round_day;
         for a in &sc.oop_actions {
             apply_action_at_round_day(&mut s, a, round_day);
         }
@@ -103,6 +122,7 @@ pub fn run_with_events(
     for (index, actions) in sc.post_oop_ticks.iter().enumerate() {
         let hour = scenario_event::FIRST_EVENT_HOUR + index as i64;
         let round_day = round_day_for_hour(sc.days_late, hour);
+        s.round_day = round_day;
         for a in actions {
             apply_action_at_round_day(&mut s, a, round_day);
         }
@@ -276,6 +296,8 @@ pub fn scenario_value_from_overture_plan(plan_in: &Value) -> Value {
         "postOopTicks": Value::Array(post_oop_ticks),
         "events": Value::Array(events),
         "daysLate": plan_in.get("daysLate").and_then(Value::as_i64).unwrap_or(0),
+        "roundStart": plan_in.get("roundStart"),
+        "roundPerks": plan_in.get("roundPerks"),
     })
 }
 
@@ -301,6 +323,11 @@ fn protection_tick(s: &mut DominionState) {
         s.daily_land = false;
     }
     *s = crate::tick::tick(s);
+    // The final protection tick produces without pre-start round perks. Its
+    // completed state is the OOP boundary even when no OOP actions were supplied.
+    if s.protection_ticks_remaining == 0 {
+        s.protection_finished = true;
+    }
 }
 
 /// One post-protection hour. Mirrors `protection_tick`
@@ -310,7 +337,7 @@ fn protection_tick(s: &mut DominionState) {
 /// and 0), so post-OOP they continue at 72 and 96, i.e. `remaining % 24 == 0`. The counter
 /// decrements past 0 here purely as that 24h clock (matches the oracle, which never clamps
 /// it post-protection). `tick::tick` has no protection gating, so the economy continues
-/// oracle-exactly. `protection_tick` is intentionally left untouched (golden invariance).
+/// oracle-exactly.
 fn post_oop_tick(s: &mut DominionState) {
     s.protection_finished = true;
     s.protection_ticks_remaining -= 1; // intentionally unclamped — the 24h daily-bonus clock
@@ -322,12 +349,13 @@ fn post_oop_tick(s: &mut DominionState) {
 }
 
 pub fn apply_action(s: &mut DominionState, a: &Value) {
-    apply_action_at_round_day(s, a, 1);
+    apply_action_at_round_day(s, a, s.round_day.max(1));
 }
 
 /// Apply one action with the simulated current round day available to mechanics
 /// whose live formulas read the round clock.
 pub fn apply_action_at_round_day(s: &mut DominionState, a: &Value, round_day: i64) {
+    s.round_day = round_day;
     match a["type"].as_str().unwrap_or("") {
         "explore" => {
             let plat_per = calc::explore_platinum_cost(s);

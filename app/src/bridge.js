@@ -19,7 +19,7 @@ export const engine = {
   // The mock fallback is browser-preview-only (!TAURI).
   async races() {
     if (TAURI) return await invoke("races");
-    // Browser-preview-only fallback. Mirror the LIVE round-51 roster (21 races):
+    // Browser-preview-only fallback. Mirror the LIVE round-52 roster (21 races):
     // reworked races use their `*-rework` key (the live variant), classics/legacy
     // are excluded, and Planewalker is disabled by source data this round.
     return [
@@ -41,8 +41,8 @@ export const engine = {
     return {
       swarm: false,
       ruleset: {
-        id: "round51", round: 51, sourceTag: "1.51.0",
-        sourceCommit: "35b977df6b47fd24636f920657b5c4edb46bbff7",
+        id: "round52", round: 52, sourceTag: "1.52.0",
+        sourceCommit: "e7d3db4268ed176674a7fba44188b95d8c554595",
       },
     };
   },

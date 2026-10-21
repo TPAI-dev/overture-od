@@ -9,10 +9,10 @@ use serde::Deserialize;
 use serde_json::Value;
 
 /// Stable identity for the game-data package compiled into this binary.
-pub const ENGINE_RULESET_ID: &str = "round51";
-pub const ENGINE_RULESET_ROUND: i64 = 51;
-pub const ENGINE_SOURCE_TAG: &str = "1.51.0";
-pub const ENGINE_SOURCE_COMMIT: &str = "35b977df6b47fd24636f920657b5c4edb46bbff7";
+pub const ENGINE_RULESET_ID: &str = "round52";
+pub const ENGINE_RULESET_ROUND: i64 = 52;
+pub const ENGINE_SOURCE_TAG: &str = "1.52.0";
+pub const ENGINE_SOURCE_COMMIT: &str = "e7d3db4268ed176674a7fba44188b95d8c554595";
 
 #[derive(Deserialize, Default, Clone)]
 pub struct Tech {
@@ -52,6 +52,8 @@ pub struct UnitData {
 
 #[derive(Deserialize, Default, Clone)]
 pub struct Race {
+    #[serde(default)]
+    pub alignment: String,
     #[serde(default)]
     pub key: String,
     #[serde(default)]
@@ -100,6 +102,37 @@ fn default_true() -> bool {
     true
 }
 
+/// One admin-declared round perk (PHP `round_perks` row, `RoundPerk` model):
+/// a flat percentage/raw value summed into the matching calculator channel for
+/// every dominion whose race alignment matches, on round days
+/// `from_day..=until_day` (either bound optional), and never before the round
+/// has started. The public simulator currently consumes `invest_bonus` and
+/// `tech_production`, the two channels enabled in the pinned ruleset.
+#[derive(serde::Serialize, Deserialize, Default, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RoundPerk {
+    #[serde(default)]
+    pub name: String,
+    pub key: String,
+    pub value: f64,
+    /// `Some("good")` / `Some("evil")` or `None` for every race.
+    #[serde(default)]
+    pub alignment: Option<String>,
+    #[serde(default)]
+    pub from_day: Option<i64>,
+    #[serde(default)]
+    pub until_day: Option<i64>,
+}
+
+impl RoundPerk {
+    /// `RoundPerk::isActiveOnDay` (inclusive bounds) && `matchesAlignment`.
+    pub fn applies(&self, alignment: &str, day: i64) -> bool {
+        self.alignment.as_deref().is_none_or(|a| a == alignment)
+            && self.from_day.is_none_or(|d| day >= d)
+            && self.until_day.is_none_or(|d| day <= d)
+    }
+}
+
 /// Provenance and any live administrative roster override not represented by
 /// the source `playable` flags.
 #[derive(serde::Serialize, Deserialize, Default, Clone)]
@@ -117,6 +150,12 @@ pub struct RulesetConfig {
     pub disabled_despite_playable: Vec<String>,
     #[serde(default)]
     pub production_overrides: HashMap<String, String>,
+    #[serde(default)]
+    pub round_perks: Vec<RoundPerk>,
+}
+
+pub fn round_perks() -> &'static [RoundPerk] {
+    &get().ruleset.round_perks
 }
 
 pub struct GameData {
@@ -411,7 +450,7 @@ mod tests {
         assert_eq!(get().ruleset.source_tag, ENGINE_SOURCE_TAG);
         assert_eq!(get().ruleset.source_commit, ENGINE_SOURCE_COMMIT);
         let live: HashSet<String> = live_race_keys().into_iter().collect();
-        assert_eq!(live.len(), 21, "round 51 offers 21 races");
+        assert_eq!(live.len(), 21, "round 52 offers 21 races");
 
         // Reworked races: the LIVE variant is the `*-rework` key, never the classic.
         for (classic, rework) in [

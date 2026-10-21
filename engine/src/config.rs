@@ -131,6 +131,8 @@ pub fn start_state(protection_type: &str, days_late: i64, race: &str) -> Dominio
         s.race = race.to_ascii_lowercase();
     }
     let d = days_late.max(0);
+    s.round_day = 1 + d;
+    s.round_started = d > 0;
     if d > 0 {
         s.resource_platinum += 10_000 * d;
         s.resource_food += 1_500 * d;

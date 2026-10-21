@@ -1,6 +1,6 @@
 # OVERTURE
 
-A desktop **build studio** for [OpenDominion](https://github.com/OpenDominion/OpenDominion) — plan your dominion's first 48 in-game hours, then add explicit post-protection scenario events, against the pinned **round-51** ruleset.
+A desktop **build studio** for [OpenDominion](https://github.com/OpenDominion/OpenDominion) — plan your dominion's first 48 in-game hours, then add explicit post-protection scenario events, against the pinned **round-52** ruleset.
 
 ![Overture — the 48-hour protection timeline, per-hour ledger, live state inspector, and resource-trajectory charts](docs/screenshot.png)
 
@@ -26,7 +26,7 @@ OVERTURE is the **simulator and planner**: you make the decisions, it tells you 
 - The **leave-protection defense gate** and **defensive power** (raw + modded, incl. temple reduction)
 - Standalone **combat / range calculators** (`engine/src/combat.rs`), golden-tested
 - Post-OOP **invasion events** with exact range/land-gain formulas, spell/tech/unit-perk casualties, optional manual casualty overrides, 9h/12h troop returns, 12h typed-land returns, boat/morale/home-force safeguards, and population-space effects
-- Round-51 invasion conversions and post-hit effects, plus exact common-unit training (including Icekin Arcane Infusion Archmages)
+- Round-52 invasion conversions and post-hit effects, plus exact common-unit training (including Icekin Arcane Infusion Archmages)
 - Immediate signed **prestige adjustment events**
 
 ### Not modeled (out of scope for this release)
@@ -83,18 +83,22 @@ npx @tauri-apps/cli build
 ## Architecture
 
 ```
-engine/   pinned round-51 simulation (Rust library) — the single source of truth.
+engine/   pinned round-52 simulation (Rust library) — the single source of truth.
           Game data in data/ is embedded at compile time via include_dir, so the
           shipped binary needs no external files and can't be accidentally altered.
 app/      Tauri v2 desktop app:
             src-tauri/src/main.rs  thin Rust adapter — calls the engine's public API only
             src/*.js               vanilla ES-module frontend (no bundler)
-data/     round-51 game tables plus executable provenance in data/ruleset.json
+data/     round-52 game tables plus executable provenance in data/ruleset.json
 ```
 
 The frontend never reaches around the engine: every number it shows comes from a `simulate` call into the Rust engine (or, in a browser preview without Tauri, from `app/src/mock.js`, which mirrors the same shapes for design work). The engine is treated as read-only — the adapter calls it, it never modifies engine logic.
 
-The executable ruleset records its source tag and commit in [`data/ruleset.json`](data/ruleset.json). That file also records two developer-confirmed live-production corrections applied after the `1.51.0` tag: Icekin Arcane Infusion Archmages cost **1,400 platinum**, and Sylvan Centaurs cost **950 platinum**. The app surfaces this provenance in its R51 badge and includes it in saved plans.
+The executable ruleset records its source tag and commit in [`data/ruleset.json`](data/ruleset.json). Round 52 is pinned to OpenDominion `1.52.0` (`e7d3db4268ed176674a7fba44188b95d8c554595`): Icekin FrostMages cost **995 platinum**, and Lycanthrope Garou cost **1,150 platinum**. The former live corrections for Arcane Infusion Archmages (**1,400 platinum**) and Sylvan Centaurs (**950 platinum**) are now part of the upstream tag, so no production overrides are needed. The app surfaces this provenance in its R52 badge and includes it in saved plans.
+
+The live round's alignment bonuses are also recorded there: good races receive **+10% castle investment through day 18**, then **+5% on days 19–33**; evil races receive **+15% research production through day 33**. These bonuses apply after the round starts, including late-start protection, with their exact day boundaries. Ordinary pre-round protection receives neither bonus.
+
+Excel export uses the bundled Round 51 community workbook with FrostMage and Garou prices updated from the compiled race data. The workbook does not model Round 52's alignment bonuses; use the desktop simulation for late-start and post-protection investment and research results.
 
 ---
 
@@ -132,4 +136,4 @@ Built and maintained by **lethal5808** — reach me on Discord (handle `lethal58
 
 OVERTURE is licensed under the **GNU Affero General Public License v3** — see [LICENSE](LICENSE).
 
-It derives from OpenDominion (also AGPL-3.0): the engine clean-room reimplements the pinned round-51 rules, and `data/` mirrors its game tables with recorded live-production corrections. Full provenance and third-party-component notes are in [NOTICE](NOTICE).
+It derives from OpenDominion (also AGPL-3.0): the engine clean-room reimplements the pinned round-52 rules, and `data/` mirrors its game tables with recorded live-production corrections. Full provenance and third-party-component notes are in [NOTICE](NOTICE).

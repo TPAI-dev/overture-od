@@ -1,10 +1,10 @@
-//! Deterministic OpenDominion protection-period engine (pinned to round 51).
+//! Deterministic OpenDominion protection-period engine (pinned to round 52).
 //!
 //! A faithful, RNG-free port of the game's per-tick logic and protection actions,
 //! validated bit-for-bit against golden vectors emitted by the PHP oracle
 //! (see engine/tests/golden/).
 
-// ───────── the protection-period SIMULATE + game-mechanic engine (pinned R51 ruleset) ─────────
+// ───────── the protection-period SIMULATE + game-mechanic engine (pinned R52 ruleset) ─────────
 pub mod calc;
 pub mod combat;
 pub mod config;

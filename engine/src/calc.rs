@@ -78,12 +78,55 @@ pub fn keep_bonus(s: &DominionState) -> f64 {
     improvement_bonus(s, s.improvement_keep, 0.25, 4000.0)
 }
 
+// ----------------------------------------------------------------------------
+// Round perks (Dominion::getRoundPerkValue / getRoundPerkMultiplier, 1.52.0+).
+// Admin-declared per-round bonuses summed into the matching calculator channel
+// for dominions whose race alignment matches, on round days from..=until, and
+// never before the round has started.
+// ----------------------------------------------------------------------------
+
+/// Sum of the active round perks with `key` for this dominion (a percentage
+/// for the `*_production`/cost/offense/defense keys, a raw per-building amount
+/// for the `*_raw` keys). The list is the state's explicit override when set,
+/// else the embedded ruleset's perks. This public simulator wires the current
+/// round's investment and research-production channels; other perk keys need
+/// their calculator integration before a future ruleset can enable them.
+pub fn round_perk_value(s: &DominionState, key: &str) -> f64 {
+    if !(s.round_started || s.protection_finished) {
+        return 0.0;
+    }
+    let perks: &[data::RoundPerk] = match &s.round_perks {
+        Some(perks) => perks,
+        None => data::round_perks(),
+    };
+    if perks.is_empty() {
+        return 0.0;
+    }
+    let alignment = data::get()
+        .races
+        .get(&s.race)
+        .map(|r| r.alignment.as_str())
+        .unwrap_or("");
+    let day = s.round_day.max(1);
+    perks
+        .iter()
+        .filter(|p| p.key == key && p.applies(alignment, day))
+        .map(|p| p.value)
+        .sum()
+}
+
+/// `round_perk_value / 100`.
+pub fn round_perk_multiplier(s: &DominionState, key: &str) -> f64 {
+    round_perk_value(s, key) / 100.0
+}
+
 /// ImproveActionService::getInvestmentMultiplier, excluding hero/wonder terms
 /// that are not represented in this simulator state. Race and tech terms are
 /// data-driven and matter in full-round explorer continuations.
 pub fn investment_multiplier(s: &DominionState, resource: &str, improvement_type: &str) -> f64 {
     1.0 + race_perk(s, "invest_bonus") / 100.0
         + race_perk(s, &format!("invest_bonus_{resource}")) / 100.0
+        + round_perk_multiplier(s, "invest_bonus")
         + tp(s, &format!("invest_bonus_{improvement_type}")) / 100.0
 }
 
@@ -923,7 +966,12 @@ pub fn tech_production(s: &DominionState) -> i64 {
     let land = total_land(s) as f64;
     let pct = (schools / land).min(SCHOOL_MAX_LAND_RATIO);
     let effective = schools.min((land * SCHOOL_MAX_LAND_RATIO).floor()) * (1.0 - pct) + spell_raw;
-    rfloor(effective * (1.0 + race_perk(s, "tech_production") / 100.0))
+    rfloor(
+        effective
+            * (1.0
+                + race_perk(s, "tech_production") / 100.0
+                + round_perk_multiplier(s, "tech_production")),
+    )
 }
 
 pub fn boat_production(s: &DominionState) -> f64 {

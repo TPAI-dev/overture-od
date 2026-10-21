@@ -343,3 +343,12 @@ fn firewalker_alchemistflame() {
 fn gnome_school() {
     check("gnome_school.json"); // school research-point production × tech_production race perk
 }
+
+#[test]
+fn round_perks_good_invest() {
+    check("round_perks_good_invest.json");
+}
+#[test]
+fn round_perks_evil_tech() {
+    check("round_perks_evil_tech.json");
+}

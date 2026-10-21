@@ -1,8 +1,8 @@
 //! Lossless OVERTURE -> community Excel-sim handoff.
 //!
-//! The Round 51 workbook remains an opaque template: formulas, tables, VBA,
-//! drawings, controls, and styles are copied unchanged. We patch the
-//! workbook's established orange input cells, discard the template's stale
+//! The reviewed Round 51 workbook supplies formulas, VBA, drawings, controls,
+//! and styles. We patch its established orange input cells and the two race
+//! training costs changed for Round 52, discard the template's stale
 //! formula caches/calculation chain, and force a full recalculation when the
 //! generated `.xlsm` is opened.
 
@@ -47,6 +47,7 @@ const MILITARY: &str = "xl/worksheets/sheet7.xml";
 const MAGIC: &str = "xl/worksheets/sheet8.xml";
 const TECHS: &str = "xl/worksheets/sheet9.xml";
 const IMPS: &str = "xl/worksheets/sheet10.xml";
+const RACE_DATA: &str = "xl/worksheets/sheet14.xml";
 
 const WORKBOOK_RACES: &[&str] = &[
     "Human",
@@ -221,6 +222,7 @@ pub fn render_overture_plan(plan_in: &Value) -> Result<RenderedWorkbook, String>
     let resolved = resolve_hour_actions(&replay_plan, &scenario)?;
     let mut edits = WorkbookEdits::default();
     reset_inputs(&mut edits);
+    write_current_race_costs(&mut edits)?;
     write_overview(&mut edits, &replay_plan, &race_name, start_land)?;
 
     let max_planned_hour = source_hour_count.max(PROTECTION_HOURS).max(
@@ -233,7 +235,9 @@ pub fn render_overture_plan(plan_in: &Value) -> Result<RenderedWorkbook, String>
             .unwrap_or(0),
     );
     let export_hours = max_planned_hour.min(MAX_EXCEL_HOUR);
-    let mut warnings = Vec::new();
+    let mut warnings = vec![
+        "Excel's Round 51 formulas do not include Round 52 alignment bonuses for late starts and post-protection play".to_string(),
+    ];
     if max_planned_hour > MAX_EXCEL_HOUR {
         warnings.push(format!(
             "Excel ends at hour {MAX_EXCEL_HOUR}; later OVERTURE actions were not exported"
@@ -281,6 +285,27 @@ pub fn render_overture_plan(plan_in: &Value) -> Result<RenderedWorkbook, String>
         warnings,
         race_name,
     })
+}
+
+// Coordinates are tied to the hash-verified template: the Garou row is slot 4,
+// and the FrostMage row is slot 3. Read values from the compiled ruleset so the
+// exported workbook and the desktop engine use the same training prices.
+fn write_current_race_costs(edits: &mut WorkbookEdits) -> Result<(), String> {
+    for (race_key, unit_index, cell) in [("lycanthrope", 3, "G60"), ("icekin", 2, "G71")] {
+        let cost = data::get()
+            .races
+            .get(race_key)
+            .and_then(|race| race.units.get(unit_index))
+            .and_then(|unit| unit.cost.get("platinum"))
+            .ok_or_else(|| {
+                format!(
+                    "missing compiled platinum cost for {race_key} slot {}",
+                    unit_index + 1
+                )
+            })?;
+        edits.set_i64(RACE_DATA, cell, *cost);
+    }
+    Ok(())
 }
 
 fn validate_export_plan(plan_in: &Value) -> Result<(), String> {
@@ -799,6 +824,7 @@ fn resolve_hour_actions(
             .get(state_index(hour))
             .ok_or_else(|| format!("missing entering state for hour {hour}"))?
             .clone();
+        state.round_day = plan::round_day_for_hour(scenario.days_late, hour as i64);
         resolve_actions_into(
             hour,
             &mut state,
@@ -816,6 +842,8 @@ fn resolve_hour_actions(
             .get(BASE + PROTECTION_HOURS)
             .ok_or_else(|| "missing pre-OOP state".to_string())?
             .clone();
+        state.protection_finished = true;
+        state.round_day = plan::round_day_for_hour(scenario.days_late, OOP_HOUR as i64);
         resolve_actions_into(
             OOP_HOUR,
             &mut state,
@@ -833,6 +861,7 @@ fn resolve_hour_actions(
             .get(state_index(hour))
             .ok_or_else(|| format!("missing entering state for post-OOP hour {hour}"))?
             .clone();
+        state.round_day = plan::round_day_for_hour(scenario.days_late, hour as i64);
         resolve_actions_into(hour, &mut state, actions, output.entry(hour).or_default())?;
     }
     Ok(output)
@@ -1571,6 +1600,33 @@ mod tests {
         assert!(!cell_fragment(&rendered.bytes, IMPS, "T5").contains("<v>"));
         assert!(cell_fragment(&rendered.bytes, PRODUCTION, "BC5").contains("<v>-1000</v>"));
         assert!(cell_fragment(&rendered.bytes, PRODUCTION, "BE5").contains("<v>500</v>"));
+    }
+
+    #[test]
+    fn exports_round_52_race_costs_and_reports_unmodeled_round_bonuses() {
+        let rendered = render_overture_plan(&json!({
+            "race": "icekin", "opening": {}, "hours": []
+        }))
+        .expect("export succeeds");
+        // The template is the R51 reference; the exported data follows R52.
+        assert!(cell_fragment(TEMPLATE, RACE_DATA, "G60").contains("<v>1115</v>"));
+        assert!(cell_fragment(TEMPLATE, RACE_DATA, "G71").contains("<v>965</v>"));
+        assert!(cell_fragment(&rendered.bytes, RACE_DATA, "G60").contains("<v>1150</v>"));
+        assert!(cell_fragment(&rendered.bytes, RACE_DATA, "G71").contains("<v>995</v>"));
+        // Both former production overrides already match the upstream R52 values.
+        assert!(cell_fragment(&rendered.bytes, RACE_DATA, "G36").contains("<v>950</v>"));
+        assert!(cell_fragment(&rendered.bytes, RACE_DATA, "G96").contains("<v>1000</v>"));
+        assert!(cell_fragment(&rendered.bytes, MILITARY, "BU4").contains(
+            "archmage_plat + IF(TblMagic[[#This Row],[Active Arc Infusion]]&gt;0,400,0)"
+        ));
+        assert!(rendered
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("Round 52 alignment bonuses")));
+        assert_eq!(
+            unzip_entry(&rendered.bytes, "xl/vbaProject.bin"),
+            unzip_entry(TEMPLATE, "xl/vbaProject.bin")
+        );
     }
 
     #[test]

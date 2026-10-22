@@ -276,6 +276,36 @@ pub fn unit_offense(s: &DominionState, slot: usize) -> f64 {
         .unwrap_or(0.0)
 }
 
+/// Semantic unit type from the round data (for example `offensive_elite` or
+/// `hybrid_elite`). Most units omit it and use the ordinary power-dominance
+/// role split.
+pub fn unit_type(s: &DominionState, slot: usize) -> &'static str {
+    data::get()
+        .races
+        .get(&s.race)
+        .and_then(|r| r.units.get(slot.saturating_sub(1)))
+        .map(|u| u.unit_type.as_str())
+        .unwrap_or("")
+}
+
+/// Whether a trained unit belongs to the army sent on attack.
+///
+/// Ordinary units retain the offense-dominant rule. A tied unit is sent only
+/// when the round data explicitly marks it as an offensive elite; this sends
+/// Troll's 7/7 Basher while keeping the 7/7 hybrid Smasher home. Goblin has no
+/// defensive elite, so both its 5/3 Hobgoblin and 6/2 Wolf Rider are sent.
+pub fn unit_is_strike_role(s: &DominionState, slot: usize) -> bool {
+    let offense = unit_offense(s, slot);
+    let defense = unit_defense(s, slot);
+    offense > defense || (offense == defense && unit_type(s, slot) == "offensive_elite")
+}
+
+/// Whether a trained unit stays home when the strike army is sent. This is the
+/// exact complement of [`unit_is_strike_role`].
+pub fn unit_is_home_role(s: &DominionState, slot: usize) -> bool {
+    !unit_is_strike_role(s, slot)
+}
+
 /// Platinum/ore training cost of unit slot 1..=4 for this race (data-driven).
 pub fn unit_cost(s: &DominionState, slot: usize, resource: &str) -> i64 {
     data::get()
@@ -1393,14 +1423,14 @@ pub fn defensive_power(s: &DominionState) -> f64 {
 // offensive elite" quantity).
 // ----------------------------------------------------------------------------
 
-/// Raw DP from DEFENSE-DOMINANT units (base defense >= base offense); the offensive
-/// elite/specialist, draftees, and the pairing bonus are excluded. Mirrors the per-unit
-/// term of `defensive_power_raw`.
+/// Raw DP from home-role units; the strike army and draftees are excluded. Pairing is
+/// recomputed after zeroing every strike slot, so a same-side pair survives and a
+/// bonus that needs a sent partner disappears.
 pub fn standing_defense_raw(s: &DominionState) -> f64 {
     let mut dp = 0.0;
+    let mut home = s.clone();
     for slot in 1..=4 {
-        // Defense-dominant units stay home; offense-dominant units are sent on attack.
-        if unit_defense(s, slot) >= unit_offense(s, slot) {
+        if unit_is_home_role(s, slot) {
             let count = match slot {
                 1 => s.military_unit1,
                 2 => s.military_unit2,
@@ -1408,9 +1438,16 @@ pub fn standing_defense_raw(s: &DominionState) -> f64 {
                 _ => s.military_unit4,
             };
             dp += count as f64 * unit_defense_modified(s, slot);
+        } else {
+            match slot {
+                1 => home.military_unit1 = 0,
+                2 => home.military_unit2 = 0,
+                3 => home.military_unit3 = 0,
+                _ => home.military_unit4 = 0,
+            }
         }
     }
-    dp
+    dp + pairing_defense_bonus(&home)
 }
 
 /// Modded standing defense = `standing_defense_raw` × DP multiplier × morale — the same
@@ -1474,8 +1511,8 @@ pub fn offensive_power(s: &DominionState) -> f64 {
 pub fn striking_offense_raw(s: &DominionState) -> f64 {
     let mut op = 0.0;
     for slot in 1..=4 {
-        // Offense-dominant units are sent on attack; defense-dominant units stay home.
-        if unit_offense(s, slot) > unit_defense(s, slot) {
+        // Strike-role units are sent on attack; home-role units stay home.
+        if unit_is_strike_role(s, slot) {
             let count = match slot {
                 1 => s.military_unit1,
                 2 => s.military_unit2,

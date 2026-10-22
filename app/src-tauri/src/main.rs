@@ -101,7 +101,18 @@ fn away_json(s: &DominionState) -> Value {
 /// Trained defensive power, DRAFTEES EXCLUDED (per spec: a race spell negates
 /// them). On-hand units only — training queue is excluded, matching
 /// `calc::defensive_power_raw`'s semantics, minus the draftee term.
-fn trained_raw(s: &DominionState) -> f64 {
+///
+/// With `exclude_strike` (the attacker "units sent on attack" setting) the strike
+/// army is dropped too, via the shared `calc::standing_defense_raw` partition:
+/// offense-dominant units are sent, and a tied unit is sent only when the round
+/// data marks it `offensive_elite` (Troll sends the 7/7 Basher, keeps the 7/7
+/// Smasher; Goblin has no defensive elite, so both 5/3 Hobgoblin and 6/2 Wolf
+/// Rider are sent; Lizardfolk's 4/4 hybrid Chameleon stays home). Pairing is
+/// recomputed on the home-only army.
+fn trained_raw(s: &DominionState, exclude_strike: bool) -> f64 {
+    if exclude_strike {
+        return calc::standing_defense_raw(s);
+    }
     // Per-unit defense incl. land/building perks + flat pairing bonus (race-generic,
     // matching calc::defensive_power_raw minus the draftee term).
     s.military_unit1 as f64 * calc::unit_defense_modified(s, 1)
@@ -383,9 +394,10 @@ fn row_json(
     round_day: i64,
     actions: Value,
     off: &HashMap<String, i64>,
+    exclude_strike: bool,
 ) -> Value {
     let mult = calc::defensive_power_multiplier(s) * calc::morale_multiplier(s);
-    let traw = trained_raw(s);
+    let traw = trained_raw(s, exclude_strike);
     // Offensive power (target-less base), symmetric with the trained-DP fields.
     let op_mult = calc::offensive_power_multiplier(s) * calc::morale_multiplier(s);
     let op_raw = calc::offensive_power_raw(s);
@@ -437,6 +449,7 @@ fn row_json(
         "trainedOpRaw": op_raw,
         "trainedOpModded": op_raw * op_mult,
         "opMult": op_mult,
+        "unitStrike": (1..=4).map(|slot| calc::unit_is_strike_role(s, slot)).collect::<Vec<_>>(),
         "unitOffense": (1..=4).map(|slot| calc::unit_offense_modified(s, slot)).collect::<Vec<_>>(),
         "unitNeedBoat": (1..=4).map(|slot| calc::unit_need_boat(s, slot)).collect::<Vec<_>>(),
         "unitReturnHours": (1..=4).map(|slot| combat::unit_return_hours(s, slot)).collect::<Vec<_>>(),
@@ -488,6 +501,12 @@ fn simulate(plan: Value) -> Result<Value, String> {
         .unwrap_or("human")
         .to_string();
     let dp_target = plan.get("dpTarget").and_then(Value::as_f64).unwrap_or(0.0);
+    // Attacker setting: count only units that stay home (strike army excluded) in
+    // the trained-DP fields and the feasibility gate. Default off = every unit.
+    let exclude_strike = plan
+        .get("dpExcludeStrike")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
 
     let scenario_v = plan::scenario_value_from_overture_plan(&plan);
     let sc: plan::Scenario =
@@ -637,7 +656,7 @@ fn simulate(plan: Value) -> Result<Value, String> {
                 }
             }
         }
-        let mut row = row_json(&disp, h as i64, round_day, actions, &off);
+        let mut row = row_json(&disp, h as i64, round_day, actions, &off, exclude_strike);
         // The log exporter re-derives each hour's actions from the ENTERING wallet (E_H) — it
         // gates self-spells on the entering mana and skips already-claimed dailies — so it needs
         // the pre-action mana / daily-claim flags / peasants that the A_H display state no longer
@@ -681,6 +700,7 @@ fn simulate(plan: Value) -> Result<Value, String> {
         plan::round_day_for_hour(sc.days_late, oop_hour as i64),
         json!([]),
         &off,
+        exclude_strike,
     );
     let tmod = last
         .get("trainedModded")
@@ -700,6 +720,7 @@ fn simulate(plan: Value) -> Result<Value, String> {
     final_obj.insert("committed".into(), json!(committed));
     final_obj.insert("feasible".into(), json!(feasible));
     final_obj.insert("dpTarget".into(), json!(dp_target));
+    final_obj.insert("dpExcludeStrike".into(), json!(exclude_strike));
     final_obj.insert("targetShort".into(), json!((dp_target - tmod).max(0.0)));
 
     Ok(json!({
@@ -1293,6 +1314,41 @@ mod round_perk_tests {
         );
         assert_eq!(out["ruleset"]["round"], 52);
         assert_eq!(out["ruleset"]["roundPerks"].as_array().unwrap().len(), 3);
+    }
+}
+
+#[cfg(test)]
+mod dp_exclude_strike_tests {
+    use super::*;
+
+    // The attacker "DP excl. sent units" setting drops the strike army from trained DP:
+    // Lizardfolk sends 6/2 Lizardmen and keeps the 4/4 hybrid Chameleon; Goblin has no
+    // defensive elite (5/3 Hobgoblin and 6/2 Wolf Rider both sent); Troll sends the 7/7
+    // offensive-elite Basher and keeps the 7/7 hybrid Smasher.
+    #[test]
+    fn dp_exclude_strike_drops_sent_units() {
+        let army = |race: &str| {
+            let mut s = config::start_state("advanced", 0, race);
+            s.military_draftees = 0;
+            s.military_unit1 = 0;
+            s.military_unit2 = 100;
+            s.military_unit3 = 10;
+            s.military_unit4 = 10;
+            s
+        };
+        let liz = army("lizardfolk");
+        assert_eq!(trained_raw(&liz, false), 300.0 + 40.0 + 20.0);
+        assert_eq!(trained_raw(&liz, true), 300.0 + 40.0);
+        let gob = army("goblin");
+        assert_eq!(trained_raw(&gob, false), 300.0 + 30.0 + 20.0);
+        assert_eq!(trained_raw(&gob, true), 300.0);
+        let troll = army("troll");
+        assert_eq!(trained_raw(&troll, false), 300.0 + 70.0 + 70.0);
+        assert_eq!(trained_raw(&troll, true), 300.0 + 70.0);
+
+        let row = row_json(&gob, 49, 1, json!([]), &HashMap::new(), true);
+        assert_eq!(row["unitStrike"], json!([true, false, true, true]));
+        assert_eq!(row["trainedRaw"], json!(300.0));
     }
 }
 

@@ -35,6 +35,12 @@ pub struct Tech {
 pub struct UnitData {
     #[serde(default)]
     pub name: String,
+    /// Semantic military role from the round data (for example
+    /// `offensive_elite` or `hybrid_elite`). Most unit roles are determined by
+    /// their offense/defense dominance; this field disambiguates tied elites
+    /// such as Troll's 7/7 Basher and Smasher.
+    #[serde(default, rename = "type")]
+    pub unit_type: String,
     #[serde(default)]
     pub cost: HashMap<String, i64>,
     #[serde(default)]

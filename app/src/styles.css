@@ -108,6 +108,8 @@ kbd {
 
 .topbar-controls { display: flex; align-items: center; gap: 16px; }
 .field { display: flex; flex-direction: column; gap: 2px; }
+.field-check { align-items: flex-start; cursor: pointer; }
+.field-check input { margin: 4px 0 0; accent-color: var(--amber); cursor: pointer; }
 .field-label { font-size: 9px; letter-spacing: .14em; text-transform: uppercase; color: var(--text-faint); }
 .field-input {
   background: var(--panel-3); color: var(--text);

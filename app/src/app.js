@@ -69,6 +69,12 @@ function defaultPlan() {
   return { race: "human", dpTarget: 6000, opening: {}, hours: Array.from({ length: DEFAULT_HOURS }, () => []), oopActions: [], events: [] };
 }
 
+function syncDpExcludeStrike() {
+  const on = !!plan.dpExcludeStrike;
+  $("#dpExcludeStrike").checked = on;
+  $("#dpNote").textContent = on ? "home units only · sent units + draftees excluded" : "trained only · draftees excluded";
+}
+
 /* ───────── state ───────── */
 let plan = defaultPlan();
 let trace = null, prev = null, playhead = 0, tab = "state", playing = null, lastFeasible = null;
@@ -126,6 +132,7 @@ async function restoreFromHistory() {
   if (!Array.isArray(plan.events)) plan.events = [];
   $("#raceSelect").value = plan.race;
   $("#dpInput").value = plan.dpTarget;
+  syncDpExcludeStrike();
   $("#postOopInput").value = Math.max(0, plan.hours.length - PROTECTION_HOURS);
   if (metaRace !== plan.race) await loadMeta(plan.race);
   else syncPlanRuleset();
@@ -197,6 +204,15 @@ async function init() {
   const dp = $("#dpInput");
   dp.value = plan.dpTarget;
   dp.addEventListener("input", () => { const nd = +dp.value || 0; if (nd !== plan.dpTarget) recordUndo("dp"); plan.dpTarget = nd; recompute(); });
+
+  // attacker setting: trained DP counts only the units that stay home when the strike army is sent.
+  $("#dpExcludeStrike").addEventListener("change", (e) => {
+    recordUndo("dpexcl");
+    plan.dpExcludeStrike = e.target.checked;
+    syncDpExcludeStrike();
+    recompute();
+  });
+  syncDpExcludeStrike();
 
   // post-OOP planning window: grows/shrinks plan.hours beyond the 48 protection hours.
   const postOop = $("#postOopInput");
@@ -399,6 +415,7 @@ async function applyPlan(p, opts = {}) {
   if (!Array.isArray(plan.events)) plan.events = [];
   $("#raceSelect").value = plan.race;
   $("#dpInput").value = plan.dpTarget;
+  syncDpExcludeStrike();
   $("#postOopInput").value = Math.max(0, plan.hours.length - PROTECTION_HOURS);
   await loadMeta(plan.race);
   playhead = 0;
@@ -649,7 +666,7 @@ function stateBlock(r, isFinal) {
     ...((r.discountedLand || 0) > 0 ? [["discounted build acres", int(r.discountedLand), true]] : []),
     ...LANDS.filter((l) => r.landBy[l] || incomingTypes[l]).map((l) => [l, `${int(r.landBy[l] || 0)}${incomingTypes[l] ? ` <span class="dim">(+${int(incomingTypes[l])})</span>` : ""}`, true]),
   ]);
-  html += group("defense (trained — draftees excluded)", [
+  html += group(r.dpExcludeStrike || plan.dpExcludeStrike ? "defense (home units — sent units + draftees excluded)" : "defense (trained — draftees excluded)", [
     ["raw", int(r.trainedRaw)], ["modded", int(r.trainedModded)], ["multiplier", "×" + r.mult.toFixed(3), true],
   ]);
   html += group("offense (trained — base, no target)", [
@@ -780,8 +797,9 @@ function militaryBlock(r) {
   const units = (meta && meta.units && meta.units.length)
     ? meta.units
     : [1, 2, 3, 4].map((s) => ({ slot: s, name: "slot " + s, offense: 0, defense: 0 }));
+  const strike = r.unitStrike || [];
   const rows = units.map((u) => [
-    `${u.name} <span class="dim">${u.offense || 0}o/${u.defense || 0}d</span>`,
+    `${u.name} <span class="dim">${u.offense || 0}o/${u.defense || 0}d${plan.dpExcludeStrike ? (strike[u.slot - 1] ? " · sent" : " · home") : ""}</span>`,
     int(m["u" + u.slot] || 0),
   ]);
   for (const [k, lbl] of [["spies", "spies"], ["assassins", "assassins"], ["wizards", "wizards"], ["archmages", "archmages"]]) {

@@ -138,7 +138,9 @@ export function simulate(plan) {
   const gtBonus = () => Math.min(1.6 * b.guard_tower / Math.max(1, totalLand()), 0.32);
   const moraleMult = () => Math.min(1, Math.max(0.9, 0.9 + morale / 1000));
   const mult = () => (1 + gtBonus() + wallsBonus() + (spells.ares_call > 0 ? 0.1 : 0)) * moraleMult();
-  const trainedRaw = () => mil.u1 * UNIT[1].def + mil.u2 * UNIT[2].def + mil.u3 * UNIT[3].def + mil.u4 * UNIT[4].def;
+  // preview partition mirrors calc::unit_is_strike_role: offense-dominant units are sent.
+  const isStrike = (slot) => UNIT[slot].off > UNIT[slot].def;
+  const trainedRaw = () => [1, 2, 3, 4].reduce((t, slot) => t + (plan.dpExcludeStrike && isStrike(slot) ? 0 : mil["u" + slot] * UNIT[slot].def), 0);
   const gryphonBonus = () => Math.min(1.6 * b.gryphon_nest / Math.max(1, totalLand()), 0.32);
   // preview OP multiplier: gryphon nests + Forges × morale (other race/prestige channels omitted).
   const opMult = () => (1 + gryphonBonus() + forgesBonus()) * moraleMult();
@@ -247,6 +249,7 @@ export function simulate(plan) {
       gemPerHr: b.diamond_mine * 15, techPerHr: techPerHr(), boatsPerHr: b.dock / 20 * (1 + harborBoatBonus()),
       trainedRaw: trainedRaw(), trainedModded: trainedRaw() * mult(), mult: mult(),
       trainedOpRaw: trainedOpRaw(), trainedOpModded: trainedOpRaw() * opMult(), opMult: opMult(),
+      unitStrike: [1, 2, 3, 4].map(isStrike),
       unitOffense: [1, 2, 3, 4].map((slot) => UNIT[slot].off),
       unitNeedBoat: [true, true, true, true],
       unitReturnHours: [1, 2, 3, 4].map((slot) => UNIT[slot].ret),

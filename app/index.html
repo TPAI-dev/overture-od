@@ -40,7 +40,11 @@
         <span class="field-label">post-OOP hrs</span>
         <input id="postOopInput" class="field-input num" type="number" inputmode="numeric" min="0" max="480" step="1" value="0" title="Extend the plan PAST out-of-protection by this many hours (0–480 ≈ 20 days). Default 0 = stop at OOP (hour 49). Use the Events tab to add explicit invasions and prestige changes; hours without events remain uninterrupted economy." />
       </label>
-      <span class="field-note" title="Draftees are excluded from the target — a race spell negates them.">trained only · draftees excluded</span>
+      <label class="field field-check" title="Attacker setting: leave the strike army (units sent on attack) out of trained DP and the target gate. Offense-dominant units are sent; a tied unit is sent only if it is the race's offensive elite (Troll sends Bashers, keeps Smashers). Goblin has no defensive elite, so Hobgoblins and Wolf Riders are both sent.">
+        <span class="field-label">DP excl. sent units</span>
+        <input id="dpExcludeStrike" type="checkbox" />
+      </label>
+      <span class="field-note" id="dpNote" title="Draftees are excluded from the target — a race spell negates them.">trained only · draftees excluded</span>
     </div>
 
     <div class="score">
